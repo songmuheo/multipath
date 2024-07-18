@@ -1,40 +1,34 @@
+# client/client.py
+
 import socket
 import time
 import threading
+import config
 
-# UDP 서버 정보
-SERVER_IP = "203.229.155.232"
-SERVER_PORT = 12345
+def generate_packet(sequence_number, interface_id):
+    header = f"Packet from interface {interface_id} with sequence {sequence_number}".encode()
+    padding = b' ' * (config.PACKET_SIZE - len(header))
+    return header + padding
 
-# 두 개의 Wi-Fi 인터페이스 IP 주소 (사설 IP 주소일 수 있음)
-INTERFACE_1_IP = "172.20.10.3"
-INTERFACE_2_IP = "192.168.0.80"
-
-# 패킷 크기와 전송 간격 설정 (H.264 트래픽 유사)
-PACKET_SIZE = 1024  # 1KB
-PACKET_INTERVAL = 0.033  # 약 30fps
-
-# UDP 소켓 생성
-sock1 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock2 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-sock1.bind((INTERFACE_1_IP, 0))
-sock2.bind((INTERFACE_2_IP, 0))
-
-def send_packets(sock, interface_name):
-    seq_num = 0
+def send_packets(interface_ip, interface_id):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((interface_ip, 0))
+    
+    sequence_number = 0
+    
     while True:
-        message = f"{interface_name}: Sequence {seq_num}".encode()
-        sock.sendto(message, (SERVER_IP, SERVER_PORT))
-        seq_num += 1
-        time.sleep(PACKET_INTERVAL)
+        packet = generate_packet(sequence_number, interface_id)
+        sock.sendto(packet, (config.SERVER_IP, config.SERVER_PORT))
+        
+        sequence_number += 1
+        time.sleep(config.PACKET_INTERVAL)
 
-# 두 개의 스레드 생성 및 시작
-thread1 = threading.Thread(target=send_packets, args=(sock1, "Interface 1"))
-thread2 = threading.Thread(target=send_packets, args=(sock2, "Interface 2"))
-
-thread1.start()
-thread2.start()
-
-thread1.join()
-thread2.join()
+if __name__ == "__main__":
+    interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1))
+    interface2_thread = threading.Thread(target=send_packets, args=(config.INTERFACE2_IP, 2))
+    
+    interface1_thread.start()
+    interface2_thread.start()
+    
+    interface1_thread.join()
+    interface2_thread.join()
