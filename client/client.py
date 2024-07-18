@@ -7,8 +7,8 @@ SERVER_IP = "203.229.155.232"
 SERVER_PORT = 12345
 
 # 두 개의 Wi-Fi 인터페이스 IP 주소 (사설 IP 주소일 수 있음)
-INTERFACE_1_IP = "192.168.1.2"
-INTERFACE_2_IP = "192.168.1.3"
+INTERFACE_1_IP = "172.20.10.3"
+INTERFACE_2_IP = "192.168.0.80"
 
 # 패킷 크기와 전송 간격 설정 (H.264 트래픽 유사)
 PACKET_SIZE = 1024  # 1KB
