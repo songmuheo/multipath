@@ -35,6 +35,7 @@ def server():
         latency = arrival_time - send_time
         log_packet(interface_ip, interface_id, sequence, arrival_time, latency)
         
+        print(f"Received packet from {interface_ip}, Interface {interface_id}, Sequence {sequence}")
         print(f"Latency for packet {sequence} from interface {interface_id} ({interface_ip}): {latency:.6f} seconds")
 
 if __name__ == "__main__":

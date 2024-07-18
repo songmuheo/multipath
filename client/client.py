@@ -21,7 +21,7 @@ def send_packets(interface_ip, interface_id):
         packet = generate_packet(sequence_number, interface_id)
         sock.sendto(packet, (config.SERVER_IP, config.SERVER_PORT))
         
-        print(f"Interface {interface_id} sent packet with sequence {sequence_number}")
+        print(f"Interface {interface_id} ({interface_ip}) sent packet with sequence {sequence_number}")
         
         sequence_number += 1
         time.sleep(config.PACKET_INTERVAL)
