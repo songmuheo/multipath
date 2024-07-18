@@ -20,10 +20,11 @@ def server():
         data, addr = sock.recvfrom(2048)
         arrival_time = time.time()
         message = data.decode().strip()
-        parts = message.split()
+        header, timestamp = message.split('|')
+        parts = header.split()
         interface = addr[0]
-        sequence = int(parts[-2])
-        send_time = float(parts[-1])
+        sequence = int(parts[-1])
+        send_time = float(timestamp)
         
         if interface not in packets:
             packets[interface] = {}

@@ -9,7 +9,7 @@ def generate_packet(sequence_number, interface_id):
     header = f"Packet from interface {interface_id} with sequence {sequence_number}".encode()
     timestamp = f"{time.time():.6f}".encode()  # 타임스탬프 추가
     padding = b' ' * (config.PACKET_SIZE - len(header) - len(timestamp))
-    return header + timestamp + padding
+    return header + b'|' + timestamp + padding
 
 def send_packets(interface_ip, interface_id):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
