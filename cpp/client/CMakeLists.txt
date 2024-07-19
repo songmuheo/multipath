@@ -7,11 +7,11 @@ set(CMAKE_CXX_STANDARD 11)
 
 find_package(realsense2 REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
 
-include_directories(${FFMPEG_INCLUDE_DIRS})
-link_directories(${FFMPEG_LIBRARY_DIRS})
+find_library(AVFORMAT avformat REQUIRED)
+find_library(AVCODEC avcodec REQUIRED)
+find_library(AVUTIL avutil REQUIRED)
+find_library(SWSCALE swscale REQUIRED)
 
 add_executable(client client.cpp)
-target_link_libraries(client ${realsense2_LIBRARY} ${OpenCV_LIBS} PkgConfig::FFMPEG)
+target_link_libraries(client ${realsense2_LIBRARY} ${OpenCV_LIBS} ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE} pthread)

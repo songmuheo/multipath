@@ -87,7 +87,7 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
 
     while (true) {
         frames = pipe.wait_for_frames();
-        rs2::frame color_frame = frames.get_color_frame();
+        rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
 
         if (!color_frame) continue;
 
