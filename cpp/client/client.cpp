@@ -15,7 +15,7 @@ extern "C" {
 
 using namespace std;
 
-void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pipe) {
+void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pipe, int port) {
     int sockfd;
     struct sockaddr_in servaddr;
 
@@ -27,7 +27,7 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
 
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(SERVER_PORT);
+    servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
     AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
@@ -126,8 +126,8 @@ int main() {
     cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
     pipe.start(cfg);
 
-    thread interface1_thread(send_packets, INTERFACE1_IP, 1, ref(pipe));
-    thread interface2_thread(send_packets, INTERFACE2_IP, 2, ref(pipe));
+    thread interface1_thread(send_packets, INTERFACE1_IP, 1, ref(pipe), SERVER_PORT);
+    thread interface2_thread(send_packets, INTERFACE2_IP, 2, ref(pipe), SERVER_PORT + 1);
 
     interface1_thread.join();
     interface2_thread.join();

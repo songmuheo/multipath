@@ -4,6 +4,7 @@
 #include <fstream>
 #include <map>
 #include <chrono>
+#include <thread>
 #include <arpa/inet.h>
 #include <opencv2/opencv.hpp>
 #include "config.h"
@@ -20,7 +21,7 @@ void log_packet(const char* interface_ip, int interface_id, int sequence, double
     log_file << interface_ip << "," << interface_id << "," << sequence << "," << latency << endl;
 }
 
-void server() {
+void server(int port) {
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
     char buffer[PACKET_SIZE];  // 패킷 크기를 위한 버퍼 선언
@@ -36,7 +37,7 @@ void server() {
     memset(&cliaddr, 0, sizeof(cliaddr));
 
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(SERVER_PORT);
+    servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
     if (bind(sockfd, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
@@ -113,7 +114,7 @@ void server() {
             frames[interface_ip] = img.clone();
 
             // 각 인터페이스별로 다른 윈도우 이름 사용
-            string window_name = "Interface " + interface_ip;
+            string window_name = "Interface " + interface_ip + ":" + to_string(port);
             cv::imshow(window_name, frames[interface_ip]);
             cv::waitKey(1);
         }
@@ -131,7 +132,11 @@ int main() {
     ofstream log_file(LOG_FILE_PATH);
     log_file << "Interface IP,Interface ID,Sequence Number,Latency" << endl;
 
-    server();
+    thread server_thread1(server, SERVER_PORT);
+    thread server_thread2(server, SERVER_PORT + 1);
+
+    server_thread1.join();
+    server_thread2.join();
 
     return 0;
 }
