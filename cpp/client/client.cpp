@@ -6,6 +6,9 @@
 #include <chrono>
 #include <cstring>
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <ifaddrs.h>
+#include <unistd.h>
 #include "config.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -17,11 +20,22 @@ using namespace std;
 
 void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pipe, int port) {
     int sockfd;
-    struct sockaddr_in servaddr;
+    struct sockaddr_in servaddr, bindaddr;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // 소켓을 인터페이스 IP에 바인딩
+    memset(&bindaddr, 0, sizeof(bindaddr));
+    bindaddr.sin_family = AF_INET;
+    bindaddr.sin_port = htons(0);  // 포트를 0으로 설정하여 시스템에서 사용 가능한 포트를 자동 할당
+    bindaddr.sin_addr.s_addr = inet_addr(interface_ip);
+
+    if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
+        perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
@@ -86,30 +100,37 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
     int frame_counter = 0;
 
     while (true) {
-        frames = pipe.wait_for_frames();
-        rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
+        try {
+            frames = pipe.wait_for_frames(15000);  // 15초로 설정 (15000ms)
+            rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
 
-        if (!color_frame) continue;
+            if (!color_frame) continue;
 
-        const int w = color_frame.get_width();
-        const int h = color_frame.get_height();
+            const int w = color_frame.get_width();
+            const int h = color_frame.get_height();
 
-        uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
+            uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
 
-        const uint8_t* inData[1] = { rgb_data };
-        int inLinesize[1] = { 3 * w };
+            const uint8_t* inData[1] = { rgb_data };
+            int inLinesize[1] = { 3 * w };
 
-        sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
+            sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
 
-        frame->pts = frame_counter++;
+            frame->pts = frame_counter++;
 
-        if (avcodec_send_frame(c, frame) < 0) {
-            cerr << "Error sending a frame for encoding" << endl;
-            exit(EXIT_FAILURE);
-        }
+            if (avcodec_send_frame(c, frame) < 0) {
+                cerr << "Error sending a frame for encoding" << endl;
+                exit(EXIT_FAILURE);
+            }
 
-        while (avcodec_receive_packet(c, pkt) == 0) {
-            sendto(sockfd, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
+            while (avcodec_receive_packet(c, pkt) == 0) {
+                sendto(sockfd, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
+            }
+        } catch (const rs2::error& e) {
+            cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "): " << e.what() << endl;
+            // 예외가 발생하면 프레임을 다시 시도
+            this_thread::sleep_for(chrono::seconds(1));
+            continue;
         }
     }
 
