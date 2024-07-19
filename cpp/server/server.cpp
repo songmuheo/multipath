@@ -23,7 +23,7 @@ void log_packet(const char* interface_ip, int interface_id, int sequence, double
 void server() {
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
-    char buffer[PACKET_SIZE];
+    char buffer[PACKET_SIZE];  // 패킷 크기를 위한 버퍼 선언
     socklen_t len;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -44,7 +44,7 @@ void server() {
         exit(EXIT_FAILURE);
     }
 
-    avcodec_register_all();
+    avcodec_register_all();  // deprecated 경고 무시하고 사용
 
     AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) {
@@ -80,7 +80,10 @@ void server() {
     while (true) {
         len = sizeof(cliaddr);
         int n = recvfrom(sockfd, buffer, PACKET_SIZE, 0, (struct sockaddr*)&cliaddr, &len);
-        buffer[n] = '\0';
+        if (n < 0) {
+            perror("recvfrom error");
+            continue;
+        }
 
         double arrival_time = static_cast<double>(chrono::system_clock::now().time_since_epoch().count() / 1000000.0);
         string interface_ip = inet_ntoa(cliaddr.sin_addr);
@@ -102,16 +105,12 @@ void server() {
 
             cv::Mat img(c->height, c->width, CV_8UC3);
             uint8_t* data[1] = { img.data };
-            int linesize[1] = { img.step1() };
+            int linesize[1] = { static_cast<int>(img.step1()) };
 
             sws_scale(sws_ctx, frame->data, frame->linesize, 0, c->height, data, linesize);
             sws_freeContext(sws_ctx);
 
-            if (frames.find(interface_ip) == frames.end()) {
-                frames[interface_ip] = img.clone();
-            } else {
-                frames[interface_ip] = img.clone();
-            }
+            frames[interface_ip] = img.clone();
 
             cv::imshow("Interface " + interface_ip, frames[interface_ip]);
             cv::waitKey(1);
