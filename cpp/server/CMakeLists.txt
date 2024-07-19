@@ -14,4 +14,4 @@ include_directories(${FFMPEG_INCLUDE_DIRS})
 link_directories(${FFMPEG_LIBRARY_DIRS})
 
 add_executable(server server.cpp)
-target_link_libraries(server ${OpenCV_LIBS} PkgConfig::FFMPEG)
+target_link_libraries(server ${OpenCV_LIBS} PkgConfig::FFMPEG pthread)
