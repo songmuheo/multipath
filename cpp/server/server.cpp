@@ -7,6 +7,7 @@
 #include <thread>
 #include <arpa/inet.h>
 #include <opencv2/opencv.hpp>
+#include <mutex>
 #include "config.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -23,8 +24,7 @@ struct PacketInfo {
 };
 
 // 시퀀스 번호를 키로 하는 패킷 맵을 인터페이스별로 구분
-map<int, PacketInfo> interface1_packets;
-map<int, PacketInfo> interface2_packets;
+map<int, PacketInfo> packets;
 mutex mtx; // 쓰레드 안전성을 위한 뮤텍스
 
 void log_packet(const char* interface_ip, int interface_id, int sequence, double latency) {
@@ -51,7 +51,7 @@ void process_frame(AVCodecContext* c, AVFrame* frame, cv::Mat& img) {
     cv::waitKey(1);
 }
 
-void server(int port, map<int, PacketInfo>& packet_map) {
+void server(int port) {
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
     char buffer[PACKET_SIZE + 8];  // 패킷 크기를 위한 버퍼 선언
@@ -122,24 +122,19 @@ void server(int port, map<int, PacketInfo>& packet_map) {
         // 뮤텍스를 사용하여 패킷 처리
         {
             lock_guard<mutex> lock(mtx);
-            auto& packets = (port == SERVER_PORT) ? interface1_packets : interface2_packets;
             auto it = packets.find(sequence);
             if (it == packets.end() || arrival_time < it->second.arrival_time) {
+                if (it != packets.end()) {
+                    av_packet_free(&it->second.pkt);
+                }
+
                 AVPacket* pkt = av_packet_alloc();
                 pkt->data = (uint8_t*)(buffer + 8);
                 pkt->size = n - 8;
 
                 packets[sequence] = {arrival_time, pkt};
-            }
 
-            // 같은 시퀀스 번호의 패킷이 두 인터페이스 모두에서 도착했는지 확인
-            if (interface1_packets.find(sequence) != interface1_packets.end() &&
-                interface2_packets.find(sequence) != interface2_packets.end()) {
-                // 더 빨리 도착한 패킷을 선택
-                PacketInfo& selected_packet = (interface1_packets[sequence].arrival_time < interface2_packets[sequence].arrival_time) ?
-                                              interface1_packets[sequence] : interface2_packets[sequence];
-
-                if (avcodec_send_packet(c, selected_packet.pkt) < 0) {
+                if (avcodec_send_packet(c, pkt) < 0) {
                     cerr << "Error sending a packet for decoding" << endl;
                     continue;
                 }
@@ -149,13 +144,7 @@ void server(int port, map<int, PacketInfo>& packet_map) {
                 }
 
                 // 로그 기록
-                log_packet(interface_ip.c_str(), interface_id, sequence, selected_packet.arrival_time);
-
-                // 사용한 패킷 삭제
-                av_packet_free(&interface1_packets[sequence].pkt);
-                av_packet_free(&interface2_packets[sequence].pkt);
-                interface1_packets.erase(sequence);
-                interface2_packets.erase(sequence);
+                log_packet(interface_ip.c_str(), interface_id, sequence, arrival_time);
             }
         }
     }
@@ -168,8 +157,8 @@ int main() {
     ofstream log_file(LOG_FILE_PATH);
     log_file << "Interface IP,Interface ID,Sequence Number,Latency" << endl;
 
-    thread server_thread1(server, SERVER_PORT, ref(interface1_packets));
-    thread server_thread2(server, SERVER_PORT + 1, ref(interface2_packets));
+    thread server_thread1(server, SERVER_PORT);
+    thread server_thread2(server, SERVER_PORT + 1);
 
     server_thread1.join();
     server_thread2.join();
