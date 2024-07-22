@@ -24,7 +24,7 @@ void log_packet(const char* interface_ip, int interface_id, int sequence, double
 void server(int port) {
     int sockfd;
     struct sockaddr_in servaddr, cliaddr;
-    char buffer[PACKET_SIZE];  // 패킷 크기를 위한 버퍼 선언
+    char buffer[PACKET_SIZE + 8];  // 패킷 크기를 위한 버퍼 선언
     socklen_t len;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -80,7 +80,7 @@ void server(int port) {
 
     while (true) {
         len = sizeof(cliaddr);
-        int n = recvfrom(sockfd, buffer, PACKET_SIZE, 0, (struct sockaddr*)&cliaddr, &len);
+        int n = recvfrom(sockfd, buffer, PACKET_SIZE + 8, 0, (struct sockaddr*)&cliaddr, &len);
         if (n < 0) {
             perror("recvfrom error");
             continue;
@@ -89,8 +89,13 @@ void server(int port) {
         double arrival_time = static_cast<double>(chrono::system_clock::now().time_since_epoch().count() / 1000000.0);
         string interface_ip = inet_ntoa(cliaddr.sin_addr);
 
-        pkt->data = (uint8_t*)buffer;
-        pkt->size = n;
+        // 헤더에서 인터페이스 ID와 시퀀스 번호를 추출
+        int interface_id, sequence;
+        memcpy(&interface_id, buffer, 4);
+        memcpy(&sequence, buffer + 4, 4);
+
+        pkt->data = (uint8_t*)(buffer + 8);
+        pkt->size = n - 8;
 
         if (avcodec_send_packet(c, pkt) < 0) {
             cerr << "Error sending a packet for decoding" << endl;
@@ -114,13 +119,13 @@ void server(int port) {
             frames[interface_ip] = img.clone();
 
             // 각 인터페이스별로 다른 윈도우 이름 사용
-            string window_name = "Interface " + interface_ip + ":" + to_string(port);
+            string window_name = "Interface " + interface_ip + ":" + to_string(port) + " ID: " + to_string(interface_id);
             cv::imshow(window_name, frames[interface_ip]);
             cv::waitKey(1);
         }
 
         // 로그 기록
-        log_packet(interface_ip.c_str(), 0, 0, 0);
+        log_packet(interface_ip.c_str(), interface_id, sequence, arrival_time);
     }
 
     av_packet_free(&pkt);

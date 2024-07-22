@@ -124,7 +124,19 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
             }
 
             while (avcodec_receive_packet(c, pkt) == 0) {
-                sendto(sockfd, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
+                // 인터페이스 ID와 시퀀스 번호를 포함한 헤더 추가
+                uint8_t header[8];
+                memcpy(header, &interface_id, 4);
+                memcpy(header + 4, &frame_counter, 4);
+
+                // 패킷 데이터에 헤더를 추가
+                uint8_t* packet_data = new uint8_t[pkt->size + 8];
+                memcpy(packet_data, header, 8);
+                memcpy(packet_data + 8, pkt->data, pkt->size);
+
+                sendto(sockfd, packet_data, pkt->size + 8, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
+
+                delete[] packet_data;
             }
         } catch (const rs2::error& e) {
             cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "): " << e.what() << endl;
