@@ -5,10 +5,10 @@ import time
 import threading
 import config
 
-def generate_packet(sequence_number, interface_id):
+def generate_packet(sequence_number, interface_id, packet_size):
     header = f"Packet from interface {interface_id} with sequence {sequence_number}".encode()
     timestamp = f"{time.time():.6f}".encode()  # 타임스탬프 추가
-    padding = b' ' * (config.PACKET_SIZE - len(header) - len(timestamp))
+    padding = b' ' * (packet_size - len(header) - len(timestamp))
     return header + b'|' + timestamp + padding
 
 def send_packets(interface_ip, interface_id):
@@ -18,13 +18,18 @@ def send_packets(interface_ip, interface_id):
     sequence_number = 0
     
     while True:
-        packet = generate_packet(sequence_number, interface_id)
-        sock.sendto(packet, (config.SERVER_IP, config.SERVER_PORT))
-        
-        print(f"Interface {interface_id} ({interface_ip}) sent packet with sequence {sequence_number}")
-        
-        sequence_number += 1
-        time.sleep(config.PACKET_INTERVAL)
+
+        remaining_bytes = config.BYTES_PER_FRAME
+        while remaining_bytes > 0:
+            packet_size = min(config.PACKET_SIZE, remaining_bytes)
+            packet = generate_packet(sequence_number, interface_id, packet_size)
+            sock.sendto(packet, (config.SERVER_IP, config.SERVER_PORT))
+            remaining_bytes -= packet_size
+            
+            print(f"Interface {interface_id} ({interface_ip}) sent {packet_size}bytes packet with sequence {sequence_number}")
+            
+            sequence_number += 1
+        time.sleep(1/config.FPS)
 
 if __name__ == "__main__":
     interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1))

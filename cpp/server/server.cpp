@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <map>
+#include <queue>
 #include <chrono>
 #include <thread>
 #include <arpa/inet.h>
@@ -23,9 +24,10 @@ struct PacketInfo {
     AVPacket* pkt;
 };
 
-// 시퀀스 번호를 키로 하는 패킷 맵을 인터페이스별로 구분
 map<int, PacketInfo> packets;
 mutex mtx; // 쓰레드 안전성을 위한 뮤텍스
+priority_queue<int, vector<int>, greater<int>> sequence_queue; // 시퀀스 번호를 저장하는 우선순위 큐
+int expected_sequence = 0; // 기대되는 시퀀스 번호
 
 void log_packet(const char* interface_ip, int interface_id, int sequence, double latency) {
     ofstream log_file(LOG_FILE_PATH, ios::app);
@@ -133,18 +135,29 @@ void server(int port) {
                 pkt->size = n - 8;
 
                 packets[sequence] = {arrival_time, pkt};
+                sequence_queue.push(sequence);
 
-                if (avcodec_send_packet(c, pkt) < 0) {
-                    cerr << "Error sending a packet for decoding" << endl;
-                    continue;
+                // 기대되는 시퀀스 번호의 패킷이 도착했는지 확인하고 처리
+                while (!sequence_queue.empty() && sequence_queue.top() == expected_sequence) {
+                    auto& selected_packet = packets[expected_sequence];
+                    if (avcodec_send_packet(c, selected_packet.pkt) < 0) {
+                        cerr << "Error sending a packet for decoding" << endl;
+                        continue;
+                    }
+
+                    while (avcodec_receive_frame(c, frame) == 0) {
+                        process_frame(c, frame, img);
+                    }
+
+                    // 로그 기록
+                    log_packet(interface_ip.c_str(), interface_id, expected_sequence, selected_packet.arrival_time);
+
+                    // 사용한 패킷 삭제
+                    av_packet_free(&selected_packet.pkt);
+                    packets.erase(expected_sequence);
+                    sequence_queue.pop();
+                    expected_sequence++;
                 }
-
-                while (avcodec_receive_frame(c, frame) == 0) {
-                    process_frame(c, frame, img);
-                }
-
-                // 로그 기록
-                log_packet(interface_ip.c_str(), interface_id, sequence, arrival_time);
             }
         }
     }
