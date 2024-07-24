@@ -20,7 +20,7 @@ latency_difference = merged_df[~merged_df['Latency_1'].isna() & ~merged_df['Late
 latency_difference['Latency Difference'] = abs(latency_difference['Latency_1'] - latency_difference['Latency_2'])
 
 # 차이가 큰 패킷만 필터링 (예: Latency 차이가 0.1초 (100ms) 이상인 경우)
-significant_latency_diff = latency_difference[latency_difference['Latency Difference'] > 0.02]
+significant_latency_diff = latency_difference[latency_difference['Latency Difference'] > 0.1]
 
 # 누락된 Sequence Number 분석
 all_sequence_numbers = set(range(int(df['Sequence Number'].min()), int(df['Sequence Number'].max()) + 1))
@@ -47,14 +47,14 @@ print(missing_sequence_numbers_1)
 print("\n2번 인터페이스에서 누락된 Sequence Number:")
 print(missing_sequence_numbers_2)
 
-# # 결과 저장
-# missing_1.to_csv('missing_1.csv', index=False)
-# missing_2.to_csv('missing_2.csv', index=False)
-# significant_latency_diff.to_csv('significant_latency_diff.csv', index=False)
+# 결과 저장
+missing_1.to_csv('/home/songmu/Multipath/python/logs/missing_1.csv', index=False)
+missing_2.to_csv('/home/songmu/Multipath/python/logs/missing_2.csv', index=False)
+significant_latency_diff.to_csv('/home/songmu/Multipath/python/logs/significant_latency_diff.csv', index=False)
 
-# # 누락된 Sequence Number를 CSV로 저장
-# missing_seq_1_df = pd.DataFrame(missing_sequence_numbers_1, columns=['Missing Sequence Number'])
-# missing_seq_1_df.to_csv('missing_sequence_numbers_1.csv', index=False)
+# 누락된 Sequence Number를 CSV로 저장
+missing_seq_1_df = pd.DataFrame(missing_sequence_numbers_1, columns=['Missing Sequence Number'])
+missing_seq_1_df.to_csv('/home/songmu/Multipath/python/logs/missing_sequence_numbers_1.csv', index=False)
 
-# missing_seq_2_df = pd.DataFrame(missing_sequence_numbers_2, columns=['Missing Sequence Number'])
-# missing_seq_2_df.to_csv('missing_sequence_numbers_2.csv', index=False)
+missing_seq_2_df = pd.DataFrame(missing_sequence_numbers_2, columns=['Missing Sequence Number'])
+missing_seq_2_df.to_csv('/home/songmu/Multipath/python/logs/missing_sequence_numbers_2.csv', index=False)
