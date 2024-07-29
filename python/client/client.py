@@ -9,13 +9,16 @@ def generate_packet(sequence_number, interface_id, packet_size):
     padding = b' ' * (packet_size - len(header) - len(timestamp))
     return header + b'|' + timestamp + padding
 
-def send_packets(interface_ip, interface_id, interface_name):
+def send_packets(interface_ip, interface_id, interface_name, start_event):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, 25, interface_name.encode())  # SO_BINDTODEVICE 옵션 설정
     sock.bind((interface_ip, 0))
     
     sequence_number = 0
     
+    # Start event를 기다림
+    start_event.wait()
+
     while sequence_number <= 50000:
         remaining_bytes = config.BYTES_PER_FRAME
         while remaining_bytes > 0:
@@ -32,11 +35,17 @@ def send_packets(interface_ip, interface_id, interface_name):
         time.sleep(1/config.FPS)
 
 if __name__ == "__main__":
-    interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1, config.INTERFACE1_NAME))
-    interface2_thread = threading.Thread(target=send_packets, args=(config.INTERFACE2_IP, 2, config.INTERFACE2_NAME))
+    start_event = threading.Event()
+
+    interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1, config.INTERFACE1_NAME, start_event))
+    interface2_thread = threading.Thread(target=send_packets, args=(config.INTERFACE2_IP, 2, config.INTERFACE2_NAME, start_event))
     
     interface1_thread.start()
     interface2_thread.start()
+    
+    # 모든 스레드가 준비되면 이벤트를 설정하여 동시에 시작하도록 함
+    time.sleep(1)  # 모든 스레드가 준비될 시간을 줌
+    start_event.set()
     
     interface1_thread.join()
     interface2_thread.join()
