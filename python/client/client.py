@@ -1,5 +1,3 @@
-# client/client.py
-
 import socket
 import time
 import threading
@@ -11,14 +9,14 @@ def generate_packet(sequence_number, interface_id, packet_size):
     padding = b' ' * (packet_size - len(header) - len(timestamp))
     return header + b'|' + timestamp + padding
 
-def send_packets(interface_ip, interface_id):
+def send_packets(interface_ip, interface_id, interface_name):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, 25, interface_name.encode())  # SO_BINDTODEVICE 옵션 설정
     sock.bind((interface_ip, 0))
     
     sequence_number = 0
     
     while True:
-
         remaining_bytes = config.BYTES_PER_FRAME
         while remaining_bytes > 0:
             packet_size = min(config.PACKET_SIZE, remaining_bytes)
@@ -26,14 +24,14 @@ def send_packets(interface_ip, interface_id):
             sock.sendto(packet, (config.SERVER_IP, config.SERVER_PORT))
             remaining_bytes -= packet_size
             
-            print(f"Interface {interface_id} ({interface_ip}) sent {packet_size}bytes packet with sequence {sequence_number}")
+            print(f"Interface {interface_id} ({interface_ip}) sent {packet_size} bytes packet with sequence {sequence_number}")
             
             sequence_number += 1
         time.sleep(1/config.FPS)
 
 if __name__ == "__main__":
-    interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1))
-    interface2_thread = threading.Thread(target=send_packets, args=(config.INTERFACE2_IP, 2))
+    interface1_thread = threading.Thread(target=send_packets, args=(config.INTERFACE1_IP, 1, config.INTERFACE1_NAME))
+    interface2_thread = threading.Thread(target=send_packets, args=(config.INTERFACE2_IP, 2, config.INTERFACE2_NAME))
     
     interface1_thread.start()
     interface2_thread.start()
