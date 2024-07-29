@@ -16,7 +16,7 @@ def send_packets(interface_ip, interface_id, interface_name):
     
     sequence_number = 0
     
-    while True:
+    while sequence_number <= 50000:
         remaining_bytes = config.BYTES_PER_FRAME
         while remaining_bytes > 0:
             packet_size = min(config.PACKET_SIZE, remaining_bytes)
@@ -27,6 +27,8 @@ def send_packets(interface_ip, interface_id, interface_name):
             print(f"Interface {interface_id} ({interface_ip}) sent {packet_size} bytes packet with sequence {sequence_number}")
             
             sequence_number += 1
+            if sequence_number > 50000:
+                break
         time.sleep(1/config.FPS)
 
 if __name__ == "__main__":
