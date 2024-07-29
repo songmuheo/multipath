@@ -1,3 +1,0 @@
-여기 있는 결과들은 수신했을 때 IP 주소가 같게 받아진 것들
-
-Client측에서 보낼 때, Binding 할 특정 interface를 지정하지 않고, IP address만 지정했음...

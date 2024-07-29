@@ -1,3 +1,0 @@
-Interface1 - iptime-WIDEN-KoreaUniv
-Interface2 - eduroam
-code - client.py(Using thread)
