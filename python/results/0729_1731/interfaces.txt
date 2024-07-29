@@ -1,0 +1,3 @@
+Interface1 - Iphone(KT)
+Interface2 - iptime-WIDEN-KoreaUniv
+code - client.py(Using thread)

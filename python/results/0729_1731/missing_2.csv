@@ -1,0 +1,4 @@
+Interface IP_1,Interface ID_1,Sequence Number,Latency_1,Interface IP_2,Interface ID_2,Latency_2
+39.7.28.111,1.0,54,0.0900526046752929,,,
+39.7.28.111,1.0,9369,0.089181900024414,,,
+39.7.28.111,1.0,19334,0.2051231861114502,,,
