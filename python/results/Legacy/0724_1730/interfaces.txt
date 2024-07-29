@@ -1,4 +1,0 @@
-Interface1 - Iphone
-Interface2 - eduroam
-
-사실 확실하지 않음...
