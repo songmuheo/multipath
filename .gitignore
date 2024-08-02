@@ -1,5 +1,0 @@
-push.sh
-python/results/
-cpp/client/build/
-cpp/server/build
-cpp/logs/
