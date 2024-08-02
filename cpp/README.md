@@ -14,6 +14,16 @@ Server에서는 패킷을 수신할 때 헤더에서 Interface ID와 Sequence nu
 
 이를 통해 중복된 패킷 중에서 더 빨리 도착한 패킷을 "선택" 할 수 있다.
 위를 통해 2개의 인터페이스에서 오는 영상 패킷을 이용하여 로스가 발생하지 않고, 더 빨리 도착한 패킷을 이용하여 비디오를 스트리밍한다.
+
+#### Version_1.2
+
+영상 전송 패킷에 Sequence 정보, Time stamp 등을 넣어서 성능을 식별하는 기능을 넣을 예정(Latency, Loss, Jitter ...)
+
+코드의 오류가 있는 것들을 잡아볼 예정
+
+매우 좋지 않은 Video quality를 높일 것 -> 현재까지의 낮은 화질은 문제가 있어보임?
+
+
 ### Client
 ```
 /~/Multipath/cpp/client 에서
