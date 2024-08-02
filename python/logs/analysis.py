@@ -22,7 +22,8 @@ latency_difference['Latency Difference'] = abs(latency_difference['Latency_1'] -
 significant_latency_diff = latency_difference[latency_difference['Latency Difference'] > 0.02]
 
 # 누락된 Sequence Number 분석
-all_sequence_numbers = set(range(int(df['Sequence Number'].min()), int(df['Sequence Number'].max()) + 1))
+# all_sequence_numbers = set(range(int(df['Sequence Number'].min()), int(df['Sequence Number'].max()) + 1))
+all_sequence_numbers = set(range(1, 50001))
 
 received_sequence_numbers_1 = set(df_1['Sequence Number'])
 received_sequence_numbers_2 = set(df_2['Sequence Number'])
