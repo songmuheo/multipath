@@ -18,13 +18,20 @@ extern "C" {
 
 using namespace std;
 
-void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pipe, int port) {
+void send_packets(const char* interface_ip, const char* interface_name, int interface_id, rs2::pipeline& pipe, int port) {
     int sockfd;
     struct sockaddr_in servaddr, bindaddr;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // 인터페이스에 소켓 바인딩
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
+        perror("SO_BINDTODEVICE failed");
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -36,6 +43,7 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
 
     if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
         perror("Bind failed");
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -56,9 +64,9 @@ void send_packets(const char* interface_ip, int interface_id, rs2::pipeline& pip
         exit(EXIT_FAILURE);
     }
 
-    c->bit_rate = 400000;
-    c->width = 640;
-    c->height = 480;
+    c->bit_rate = BITRATE;
+    c->width = WIDTH;
+    c->height = HEIGHT;
     c->time_base = {1, 30};
     c->framerate = {30, 1};
     c->gop_size = 10;
@@ -159,8 +167,8 @@ int main() {
     cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
     pipe.start(cfg);
 
-    thread interface1_thread(send_packets, INTERFACE1_IP, 1, ref(pipe), SERVER_PORT);
-    thread interface2_thread(send_packets, INTERFACE2_IP, 2, ref(pipe), SERVER_PORT + 1);
+    thread interface1_thread(send_packets, INTERFACE1_IP, INTERFACE1_NAME,  1, ref(pipe), SERVER_PORT);
+    thread interface2_thread(send_packets, INTERFACE2_IP, INTERFACE2_NAME, 2, ref(pipe), SERVER_PORT + 1);
 
     interface1_thread.join();
     interface2_thread.join();

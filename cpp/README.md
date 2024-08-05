@@ -23,6 +23,8 @@ Server에서는 패킷을 수신할 때 헤더에서 Interface ID와 Sequence nu
 
 매우 좋지 않은 Video quality를 높일 것 -> 현재까지의 낮은 화질은 문제가 있어보임?
 
+두 path에서 오는 것을 먼저 오면, 뒤에건 버리고 앞에것만 catch 하는 이 쪽 부분을 더 보완해야할 것 같음...
+
 
 ### Client
 ```
