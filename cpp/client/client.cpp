@@ -18,7 +18,7 @@ extern "C" {
 
 using namespace std;
 
-void send_packets(const char* interface_ip, const char* interface_name, int interface_id, rs2::pipeline& pipe, int port) {
+void send_packets(const char* interface_ip, const char* interface_name, const uint8_t* packet_data, size_t packet_size, int port) {
     int sockfd;
     struct sockaddr_in servaddr, bindaddr;
 
@@ -52,6 +52,20 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
     servaddr.sin_port = htons(port);
     servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
+    // 동일한 패킷 데이터 전송
+    sendto(sockfd, packet_data, packet_size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
+
+    close(sockfd);
+}
+
+int main() {
+    rs2::pipeline pipe;
+    rs2::config cfg;
+
+    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
+    pipe.start(cfg);
+
+    // 비디오 프레임 인코딩 설정
     AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         cerr << "Codec not found" << endl;
@@ -64,9 +78,9 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
         exit(EXIT_FAILURE);
     }
 
-    c->bit_rate = BITRATE;
-    c->width = WIDTH;
-    c->height = HEIGHT;
+    c->bit_rate = 400000;
+    c->width = 640;
+    c->height = 480;
     c->time_base = {1, 30};
     c->framerate = {30, 1};
     c->gop_size = 10;
@@ -76,7 +90,6 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
     if (avcodec_open2(c, codec, NULL) < 0) {
         cerr << "Could not open codec" << endl;
         avcodec_free_context(&c);
-        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -84,7 +97,6 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
     if (!frame) {
         cerr << "Could not allocate video frame" << endl;
         avcodec_free_context(&c);
-        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -102,7 +114,6 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
         cerr << "Could not allocate AVPacket" << endl;
         av_frame_free(&frame);
         avcodec_free_context(&c);
-        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -117,67 +128,52 @@ void send_packets(const char* interface_ip, const char* interface_name, int inte
         av_packet_free(&pkt);
         av_frame_free(&frame);
         avcodec_free_context(&c);
-        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
-    rs2::frameset frames;
-    int frame_counter = 0;
+    // 프레임 캡처 및 인코딩
+    rs2::frameset frames = pipe.wait_for_frames();
+    rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
 
-    while (true) {
-        try {
-            frames = pipe.wait_for_frames(5000);  // 5초로 설정 (5000ms)
-            rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
+    const int w = color_frame.get_width();
+    const int h = color_frame.get_height();
 
-            if (!color_frame) continue;
+    uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
 
-            const int w = color_frame.get_width();
-            const int h = color_frame.get_height();
+    const uint8_t* inData[1] = { rgb_data };
+    int inLinesize[1] = { 3 * w };
 
-            uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
+    sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
 
-            const uint8_t* inData[1] = { rgb_data };
-            int inLinesize[1] = { 3 * w };
+    frame->pts = 0;
 
-            sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
-
-            frame->pts = frame_counter++;
-
-            if (avcodec_send_frame(c, frame) < 0) {
-                cerr << "Error sending a frame for encoding" << endl;
-                exit(EXIT_FAILURE);
-            }
-
-            while (avcodec_receive_packet(c, pkt) == 0) {
-                // 패킷 데이터만 전송
-                sendto(sockfd, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
-            }
-        } catch (const rs2::error& e) {
-            cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "): " << e.what() << endl;
-            // 예외가 발생하면 프레임을 다시 시도
-            this_thread::sleep_for(chrono::seconds(1));
-            continue;
-        }
+    if (avcodec_send_frame(c, frame) < 0) {
+        cerr << "Error sending a frame for encoding" << endl;
+        exit(EXIT_FAILURE);
     }
 
+    size_t packet_size = 0;
+    uint8_t* packet_data = nullptr;
+
+    if (avcodec_receive_packet(c, pkt) == 0) {
+        packet_size = pkt->size;
+        packet_data = new uint8_t[packet_size];
+        memcpy(packet_data, pkt->data, packet_size);
+    }
+
+    // 스레드를 통해 동일한 패킷 데이터 전송
+    thread interface1_thread(send_packets, INTERFACE1_IP, INTERFACE1_NAME, packet_data, packet_size, SERVER_PORT);
+    thread interface2_thread(send_packets, INTERFACE2_IP, INTERFACE2_NAME, packet_data, packet_size, SERVER_PORT + 1);
+
+    interface1_thread.join();
+    interface2_thread.join();
+
+    // 메모리 정리
+    delete[] packet_data;
     av_packet_free(&pkt);
     av_frame_free(&frame);
     avcodec_free_context(&c);
     sws_freeContext(sws_ctx);
-}
-
-int main() {
-    rs2::pipeline pipe;
-    rs2::config cfg;
-
-    cfg.enable_stream(RS2_STREAM_COLOR, 640, HEIGHT, RS2_FORMAT_RGB8, 30);
-    pipe.start(cfg);
-
-    thread interface1_thread(send_packets, INTERFACE1_IP, INTERFACE1_NAME,  1, ref(pipe), SERVER_PORT);
-    thread interface2_thread(send_packets, INTERFACE2_IP, INTERFACE2_NAME, 2, ref(pipe), SERVER_PORT + 1);
-
-    interface1_thread.join();
-    interface2_thread.join();
 
     return 0;
 }

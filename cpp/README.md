@@ -25,11 +25,18 @@ Server에서는 패킷을 수신할 때 헤더에서 Interface ID와 Sequence nu
 
 두 path에서 오는 것을 먼저 오면, 뒤에건 버리고 앞에것만 catch 하는 이 쪽 부분을 더 보완해야할 것 같음...
 
+#### Version2
+
+Client - realsense pipeline을 thread 실행 내에서 처리해서, thread마다 완전히 같은 frame을 capture하지 않을 수 있음. 따라서, 전송되는 패킷이 완전히 같은 패킷이 아닐 확률이 높고, 디코딩시 오류가 있을 확률이 높음.
+thread로 작업을 나누기 이전에 pipeline과 frame capture를 완료하고, thread에서는 전송만 담당
+
+Server - 패킷을 잘 나눠서 디코딩? 하나만 받았을 때, 두개 다 이용했을 때 나눌 수 있도록 패킷을 저장해줌 ....? 혹은 이는 Wireshark에서 처리해줄것이니, Packet을 수신해주기만 하면 되나?
 
 ### Client
 ```
 /~/Multipath/cpp/client 에서
 mkdir build
+cd build
 cmake ..
 make
 ./client
@@ -39,6 +46,7 @@ make
 ```
 /~/Multipath/cpp/server 에서
 mkdir build
+cd build
 cmake ..
 make
 ./server
