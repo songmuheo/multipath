@@ -43,12 +43,6 @@ int create_socket_and_bind(const char* interface_ip, const char* interface_name)
     return sockfd;
 }
 
-void send_packet(int sockfd, const struct sockaddr_in& servaddr, const uint8_t* packet_data, size_t packet_size) {
-    if (sendto(sockfd, packet_data, packet_size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
-        perror("sendto failed");
-    }
-}
-
 int main() {
     rs2::pipeline pipe;
     rs2::config cfg;
@@ -123,18 +117,28 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    rs2::frameset frames;
+    int frame_counter = 0;
+
     int sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
     int sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
-    struct sockaddr_in servaddr;
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(SERVER_PORT);
-    servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    struct sockaddr_in servaddr1, servaddr2;
+    memset(&servaddr1, 0, sizeof(servaddr1));
+    servaddr1.sin_family = AF_INET;
+    servaddr1.sin_port = htons(SERVER_PORT);
+    servaddr1.sin_addr.s_addr = inet_addr(SERVER_IP);
+    memset(&servaddr2, 0, sizeof(servaddr2));
+    servaddr2.sin_family = AF_INET;
+    servaddr2.sin_port = htons(SERVER_PORT+1);
+    servaddr2.sin_addr.s_addr = inet_addr(SERVER_IP);
+
 
     while (true) {
         rs2::frameset frames = pipe.wait_for_frames();
         rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
+
+        if (!color_frame) continue;
 
         const int w = color_frame.get_width();
         const int h = color_frame.get_height();
@@ -147,7 +151,7 @@ int main() {
         sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
 
         // RealSense 프레임의 타임스탬프를 사용하여 PTS 설정
-        frame->pts = static_cast<int64_t>(frames.get_timestamp() * 90);  // 90kHz 타임베이스 사용
+        frame->pts = frame_counter ++;
 
         if (avcodec_send_frame(c, frame) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
@@ -158,18 +162,12 @@ int main() {
         uint8_t* packet_data = nullptr;
 
         if (avcodec_receive_packet(c, pkt) == 0) {
-            packet_size = pkt->size;
-            packet_data = new uint8_t[packet_size];
-            memcpy(packet_data, pkt->data, packet_size);
+            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1));
+            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
         } else {
             cerr << "Error receiving encoded packet" << endl;
             break;
         }
-
-        send_packet(sockfd1, servaddr, packet_data, packet_size);
-        send_packet(sockfd2, servaddr, packet_data, packet_size);
-
-        delete[] packet_data;
     }
 
     close(sockfd1);
