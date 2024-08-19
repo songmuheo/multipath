@@ -1,0 +1,3 @@
+Interface1 - LGu+
+Interface2 - KT
+code - client.py(Using thread)
