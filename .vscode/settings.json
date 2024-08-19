@@ -6,6 +6,8 @@
         "bitset": "cpp",
         "string_view": "cpp",
         "initializer_list": "cpp",
-        "utility": "cpp"
+        "utility": "cpp",
+        "cstring": "cpp",
+        "chrono": "cpp"
     }
 }
