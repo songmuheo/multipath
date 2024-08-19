@@ -157,14 +157,14 @@ int main() {
             cerr << "Error sending a frame for encoding" << endl;
             break;
         }
-
-        size_t packet_size = 0;
-        uint8_t* packet_data = nullptr;
-
-        if (avcodec_receive_packet(c, pkt) == 0) {
+        int ret;
+        while ((ret = avcodec_receive_packet(c, pkt)) == 0) {
             sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1));
-            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
-        } else {
+            sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
+            av_packet_unref(pkt);
+        }
+
+        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             cerr << "Error receiving encoded packet" << endl;
             break;
         }
