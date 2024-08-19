@@ -7,12 +7,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <set>
-#include <mutex>
-#include <functional>
 #include "config.h"
-
-
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -23,16 +18,11 @@ using namespace std;
 using namespace cv;
 
 struct PacketInfo {
-    size_t hash;
+    int64_t timestamp;
     vector<uint8_t> data;
 };
 
-size_t generate_hash(const vector<uint8_t>& packet_data) {
-    // 간단한 해시 생성 함수 (여기서는 std::hash 사용)
-    return hash<string>{}(string(packet_data.begin(), packet_data.end()));
-}
-
-void receive_and_process_packets(int port, unordered_map<size_t, PacketInfo>& packet_buffer, set<size_t>& processed_hashes, mutex& buffer_mutex) {
+void receive_and_process_packets(int port, unordered_map<int64_t, PacketInfo>& packet_buffer, mutex& buffer_mutex) {
     int sockfd;
     struct sockaddr_in servaddr;
 
@@ -59,26 +49,22 @@ void receive_and_process_packets(int port, unordered_map<size_t, PacketInfo>& pa
     while (true) {
         int n = recvfrom(sockfd, buffer, sizeof(buffer), MSG_WAITALL, (struct sockaddr*)&servaddr, &len);
         if (n > 0) {
+            int64_t timestamp = chrono::steady_clock::now().time_since_epoch().count();
+
             vector<uint8_t> packet_data(buffer, buffer + n);
-            size_t packet_hash = generate_hash(packet_data);
 
             lock_guard<mutex> lock(buffer_mutex);
-
-            if (processed_hashes.find(packet_hash) == processed_hashes.end()) {
-                packet_buffer[packet_hash] = {packet_hash, packet_data};
-                processed_hashes.insert(packet_hash);
-            }
+            packet_buffer[timestamp] = {timestamp, packet_data};
         }
     }
 }
 
 int main() {
-    unordered_map<size_t, PacketInfo> packet_buffer;
-    set<size_t> processed_hashes; // 이미 처리된 패킷의 해시를 추적
+    unordered_map<int64_t, PacketInfo> packet_buffer;
     mutex buffer_mutex;
 
-    thread interface1_thread(receive_and_process_packets, SERVER_PORT, ref(packet_buffer), ref(processed_hashes), ref(buffer_mutex));
-    thread interface2_thread(receive_and_process_packets, SERVER_PORT + 1, ref(packet_buffer), ref(processed_hashes), ref(buffer_mutex));
+    thread interface1_thread(receive_and_process_packets, SERVER_PORT, ref(packet_buffer), ref(buffer_mutex));
+    thread interface2_thread(receive_and_process_packets, SERVER_PORT + 1, ref(packet_buffer), ref(buffer_mutex));
 
     interface1_thread.detach();
     interface2_thread.detach();
@@ -120,21 +106,21 @@ int main() {
     SwsContext* sws_ctx = nullptr;
 
     while (true) {
-        size_t min_hash = SIZE_MAX;
+        int64_t min_timestamp = INT64_MAX;
         vector<uint8_t> selected_packet;
 
         {
             lock_guard<mutex> lock(buffer_mutex);
 
-            for (auto& [hash, packet_info] : packet_buffer) {
-                if (hash < min_hash) {
-                    min_hash = hash;
+            for (auto& [timestamp, packet_info] : packet_buffer) {
+                if (timestamp < min_timestamp) {
+                    min_timestamp = timestamp;
                     selected_packet = packet_info.data;
                 }
             }
 
-            if (min_hash != SIZE_MAX) {
-                packet_buffer.erase(min_hash);
+            if (min_timestamp != INT64_MAX) {
+                packet_buffer.erase(min_timestamp);
             }
         }
 

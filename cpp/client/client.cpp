@@ -28,8 +28,7 @@ int create_socket_and_bind(const char* interface_ip, const char* interface_name)
         exit(EXIT_FAILURE);
     }
 
-    struct sockaddr_in bindaddr;
-    memset(&bindaddr, 0, sizeof(bindaddr));
+    struct sockaddr_in bindaddr = {};
     bindaddr.sin_family = AF_INET;
     bindaddr.sin_port = htons(0);
     bindaddr.sin_addr.s_addr = inet_addr(interface_ip);
@@ -43,6 +42,24 @@ int create_socket_and_bind(const char* interface_ip, const char* interface_name)
     return sockfd;
 }
 
+void encode_and_send_frame(AVCodecContext* c, AVFrame* frame, AVPacket* pkt, int sockfd1, int sockfd2, struct sockaddr_in* servaddr1, struct sockaddr_in* servaddr2) {
+    if (avcodec_send_frame(c, frame) < 0) {
+        cerr << "Error sending a frame for encoding" << endl;
+        return;
+    }
+
+    int ret;
+    while ((ret = avcodec_receive_packet(c, pkt)) == 0) {
+        sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)servaddr1, sizeof(*servaddr1));
+        sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)servaddr2, sizeof(*servaddr2));
+        av_packet_unref(pkt);
+    }
+
+    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        cerr << "Error receiving encoded packet" << endl;
+    }
+}
+
 int main() {
     rs2::pipeline pipe;
     rs2::config cfg;
@@ -50,7 +67,7 @@ int main() {
     cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_RGB8, FPS);
     pipe.start(cfg);
 
-    AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         cerr << "Codec not found" << endl;
         exit(EXIT_FAILURE);
@@ -117,26 +134,23 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    rs2::frameset frames;
     int frame_counter = 0;
-
     int sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
     int sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
-    struct sockaddr_in servaddr1, servaddr2;
-    memset(&servaddr1, 0, sizeof(servaddr1));
+    struct sockaddr_in servaddr1 = {};
     servaddr1.sin_family = AF_INET;
     servaddr1.sin_port = htons(SERVER_PORT);
     servaddr1.sin_addr.s_addr = inet_addr(SERVER_IP);
-    memset(&servaddr2, 0, sizeof(servaddr2));
-    servaddr2.sin_family = AF_INET;
-    servaddr2.sin_port = htons(SERVER_PORT+1);
-    servaddr2.sin_addr.s_addr = inet_addr(SERVER_IP);
 
+    struct sockaddr_in servaddr2 = {};
+    servaddr2.sin_family = AF_INET;
+    servaddr2.sin_port = htons(SERVER_PORT + 1);
+    servaddr2.sin_addr.s_addr = inet_addr(SERVER_IP);
 
     while (true) {
         rs2::frameset frames = pipe.wait_for_frames();
-        rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
+        rs2::video_frame color_frame = frames.get_color_frame();
 
         if (!color_frame) continue;
 
@@ -150,24 +164,9 @@ int main() {
 
         sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
 
-        // RealSense 프레임의 타임스탬프를 사용하여 PTS 설정
-        frame->pts = frame_counter ++;
+        frame->pts = frame_counter++;
 
-        if (avcodec_send_frame(c, frame) < 0) {
-            cerr << "Error sending a frame for encoding" << endl;
-            break;
-        }
-        int ret;
-        while ((ret = avcodec_receive_packet(c, pkt)) == 0) {
-            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1));
-            sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
-            av_packet_unref(pkt);
-        }
-
-        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-            cerr << "Error receiving encoded packet" << endl;
-            break;
-        }
+        encode_and_send_frame(c, frame, pkt, sockfd1, sockfd2, &servaddr1, &servaddr2);
     }
 
     close(sockfd1);
