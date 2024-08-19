@@ -1,11 +1,13 @@
-#include <opencv2/opencv.hpp>
+// client/client.cpp
+
+#include <librealsense2/rs.hpp>
 #include <iostream>
-#include <cstring>
-#include <chrono>
-#include <unordered_map>
 #include <thread>
+#include <chrono>
+#include <cstring>
 #include <arpa/inet.h>
-#include <sys/socket.h>
+#include <sys/types.h>
+#include <ifaddrs.h>
 #include <unistd.h>
 #include "config.h"
 extern "C" {
@@ -15,16 +17,10 @@ extern "C" {
 }
 
 using namespace std;
-using namespace cv;
 
-struct PacketInfo {
-    int64_t timestamp;
-    vector<uint8_t> data;
-};
-
-void receive_and_process_packets(int port, unordered_map<int64_t, PacketInfo>& packet_buffer, mutex& buffer_mutex) {
+void send_packets(const char* interface_ip, const char* interface_name, int interface_id, rs2::pipeline& pipe, int port) {
     int sockfd;
-    struct sockaddr_in servaddr;
+    struct sockaddr_in servaddr, bindaddr;
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
@@ -32,45 +28,31 @@ void receive_and_process_packets(int port, unordered_map<int64_t, PacketInfo>& p
         exit(EXIT_FAILURE);
     }
 
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(port);
-    servaddr.sin_addr.s_addr = INADDR_ANY;
+    // 인터페이스에 소켓 바인딩
+    if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
+        perror("SO_BINDTODEVICE failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
 
-    if (bind(sockfd, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
+    // 소켓을 인터페이스 IP에 바인딩
+    memset(&bindaddr, 0, sizeof(bindaddr));
+    bindaddr.sin_family = AF_INET;
+    bindaddr.sin_port = htons(0);  // 포트를 0으로 설정하여 시스템에서 사용 가능한 포트를 자동 할당
+    bindaddr.sin_addr.s_addr = inet_addr(interface_ip);
+
+    if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
         perror("Bind failed");
         close(sockfd);
         exit(EXIT_FAILURE);
     }
 
-    uint8_t buffer[65536];
-    socklen_t len = sizeof(servaddr);
+    memset(&servaddr, 0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(port);
+    servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
-    while (true) {
-        int n = recvfrom(sockfd, buffer, sizeof(buffer), MSG_WAITALL, (struct sockaddr*)&servaddr, &len);
-        if (n > 0) {
-            int64_t timestamp = chrono::steady_clock::now().time_since_epoch().count();
-
-            vector<uint8_t> packet_data(buffer, buffer + n);
-
-            lock_guard<mutex> lock(buffer_mutex);
-            packet_buffer[timestamp] = {timestamp, packet_data};
-        }
-    }
-}
-
-int main() {
-    unordered_map<int64_t, PacketInfo> packet_buffer;
-    mutex buffer_mutex;
-
-    thread interface1_thread(receive_and_process_packets, SERVER_PORT, ref(packet_buffer), ref(buffer_mutex));
-    thread interface2_thread(receive_and_process_packets, SERVER_PORT + 1, ref(packet_buffer), ref(buffer_mutex));
-
-    interface1_thread.detach();
-    interface2_thread.detach();
-
-    // Initialize FFmpeg decoder
-    AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
     if (!codec) {
         cerr << "Codec not found" << endl;
         exit(EXIT_FAILURE);
@@ -82,9 +64,19 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    c->bit_rate = BITRATE;
+    c->width = WIDTH;
+    c->height = HEIGHT;
+    c->time_base = {1, 30};
+    c->framerate = {30, 1};
+    c->gop_size = 10;
+    c->max_b_frames = 1;
+    c->pix_fmt = AV_PIX_FMT_YUV420P;
+
     if (avcodec_open2(c, codec, NULL) < 0) {
         cerr << "Could not open codec" << endl;
         avcodec_free_context(&c);
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
@@ -92,6 +84,16 @@ int main() {
     if (!frame) {
         cerr << "Could not allocate video frame" << endl;
         avcodec_free_context(&c);
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    frame->format = c->pix_fmt;
+    frame->width = c->width;
+    frame->height = c->height;
+
+    if (av_frame_get_buffer(frame, 32) < 0) {
+        cerr << "Could not allocate the video frame data" << endl;
         exit(EXIT_FAILURE);
     }
 
@@ -100,69 +102,82 @@ int main() {
         cerr << "Could not allocate AVPacket" << endl;
         av_frame_free(&frame);
         avcodec_free_context(&c);
+        close(sockfd);
         exit(EXIT_FAILURE);
     }
 
-    SwsContext* sws_ctx = nullptr;
+    struct SwsContext* sws_ctx = sws_getContext(
+        c->width, c->height, AV_PIX_FMT_RGB24,
+        c->width, c->height, c->pix_fmt,
+        SWS_BILINEAR, NULL, NULL, NULL
+    );
+
+    if (!sws_ctx) {
+        cerr << "Could not initialize the conversion context" << endl;
+        av_packet_free(&pkt);
+        av_frame_free(&frame);
+        avcodec_free_context(&c);
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    rs2::frameset frames;
+    int frame_counter = 0;
 
     while (true) {
-        int64_t min_timestamp = INT64_MAX;
-        vector<uint8_t> selected_packet;
+        try {
+            frames = pipe.wait_for_frames(5000);  // 5초로 설정 (5000ms)
+            rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
 
-        {
-            lock_guard<mutex> lock(buffer_mutex);
+            if (!color_frame) continue;
 
-            for (auto& [timestamp, packet_info] : packet_buffer) {
-                if (timestamp < min_timestamp) {
-                    min_timestamp = timestamp;
-                    selected_packet = packet_info.data;
-                }
+            const int w = color_frame.get_width();
+            const int h = color_frame.get_height();
+
+            uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
+
+            const uint8_t* inData[1] = { rgb_data };
+            int inLinesize[1] = { 3 * w };
+
+            sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
+
+            frame->pts = frame_counter++;
+
+            if (avcodec_send_frame(c, frame) < 0) {
+                cerr << "Error sending a frame for encoding" << endl;
+                exit(EXIT_FAILURE);
             }
 
-            if (min_timestamp != INT64_MAX) {
-                packet_buffer.erase(min_timestamp);
+            while (avcodec_receive_packet(c, pkt) == 0) {
+                // 패킷 데이터만 전송
+                sendto(sockfd, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
             }
+        } catch (const rs2::error& e) {
+            cerr << "RealSense error calling " << e.get_failed_function() << "(" << e.get_failed_args() << "): " << e.what() << endl;
+            // 예외가 발생하면 프레임을 다시 시도
+            this_thread::sleep_for(chrono::seconds(1));
+            continue;
         }
-
-        if (!selected_packet.empty()) {
-            pkt->data = selected_packet.data();
-            pkt->size = selected_packet.size();
-
-            if (avcodec_send_packet(c, pkt) < 0) {
-                cerr << "Error sending packet for decoding" << endl;
-                continue;
-            }
-
-            while (avcodec_receive_frame(c, frame) == 0) {
-                if (!sws_ctx) {
-                    sws_ctx = sws_getContext(frame->width, frame->height, c->pix_fmt,
-                                             frame->width, frame->height, AV_PIX_FMT_BGR24,
-                                             SWS_BILINEAR, NULL, NULL, NULL);
-                }
-
-                uint8_t* data[1] = { new uint8_t[frame->width * frame->height * 3] };
-                int linesize[1] = { 3 * frame->width };
-
-                sws_scale(sws_ctx, frame->data, frame->linesize, 0, frame->height, data, linesize);
-
-                Mat img(frame->height, frame->width, CV_8UC3, data[0]);
-
-                imshow("Received Video", img);
-                delete[] data[0];
-
-                if (waitKey(30) >= 0) {
-                    break;
-                }
-            }
-        }
-
-        this_thread::sleep_for(chrono::milliseconds(10));
     }
 
     av_packet_free(&pkt);
     av_frame_free(&frame);
     avcodec_free_context(&c);
-    if (sws_ctx) sws_freeContext(sws_ctx);
+    sws_freeContext(sws_ctx);
+}
+
+int main() {
+    rs2::pipeline pipe;
+    rs2::config cfg;
+
+    cfg.enable_stream(RS2_STREAM_COLOR, 640, HEIGHT, RS2_FORMAT_RGB8, 30);
+    pipe.start(cfg);
+
+    thread interface1_thread(send_packets, INTERFACE1_IP, INTERFACE1_NAME,  1, ref(pipe), SERVER_PORT);
+    thread interface2_thread(send_packets, INTERFACE2_IP, INTERFACE2_NAME, 2, ref(pipe), SERVER_PORT + 1);
+
+    interface1_thread.join();
+    interface2_thread.join();
 
     return 0;
 }
