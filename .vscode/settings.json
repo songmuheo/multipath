@@ -8,6 +8,8 @@
         "initializer_list": "cpp",
         "utility": "cpp",
         "cstring": "cpp",
-        "chrono": "cpp"
+        "chrono": "cpp",
+        "ostream": "cpp",
+        "iostream": "cpp"
     }
 }

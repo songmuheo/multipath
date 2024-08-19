@@ -1,8 +1,5 @@
-// client/client.cpp
-
 #include <librealsense2/rs.hpp>
 #include <iostream>
-#include <thread>
 #include <chrono>
 #include <cstring>
 #include <arpa/inet.h>
@@ -18,11 +15,8 @@ extern "C" {
 
 using namespace std;
 
-void send_packets(const char* interface_ip, const char* interface_name, const uint8_t* packet_data, size_t packet_size, int port) {
-    int sockfd;
-    struct sockaddr_in servaddr, bindaddr;
-
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+int create_socket_and_bind(const char* interface_ip, const char* interface_name) {
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
@@ -36,6 +30,7 @@ void send_packets(const char* interface_ip, const char* interface_name, const ui
     }
 
     // 소켓을 인터페이스 IP에 바인딩
+    struct sockaddr_in bindaddr;
     memset(&bindaddr, 0, sizeof(bindaddr));
     bindaddr.sin_family = AF_INET;
     bindaddr.sin_port = htons(0);  // 포트를 0으로 설정하여 시스템에서 사용 가능한 포트를 자동 할당
@@ -47,22 +42,21 @@ void send_packets(const char* interface_ip, const char* interface_name, const ui
         exit(EXIT_FAILURE);
     }
 
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(port);
-    servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    return sockfd;
+}
 
-    // 동일한 패킷 데이터 전송
-    sendto(sockfd, packet_data, packet_size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr));
-
-    close(sockfd);
+void send_packet(int sockfd, const struct sockaddr_in& servaddr, const uint8_t* packet_data, size_t packet_size) {
+    // 패킷 전송
+    if (sendto(sockfd, packet_data, packet_size, 0, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
+        perror("sendto failed");
+    }
 }
 
 int main() {
     rs2::pipeline pipe;
     rs2::config cfg;
 
-    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
+    cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_RGB8, FPS);
     pipe.start(cfg);
 
     // 비디오 프레임 인코딩 설정
@@ -79,10 +73,10 @@ int main() {
     }
 
     c->bit_rate = 400000;
-    c->width = 640;
-    c->height = 480;
-    c->time_base = {1, 30};
-    c->framerate = {30, 1};
+    c->width = WIDTH;
+    c->height = HEIGHT;
+    c->time_base = {1, FPS};
+    c->framerate = {FPS, 1};
     c->gop_size = 10;
     c->max_b_frames = 1;
     c->pix_fmt = AV_PIX_FMT_YUV420P;
@@ -106,6 +100,8 @@ int main() {
 
     if (av_frame_get_buffer(frame, 32) < 0) {
         cerr << "Could not allocate the video frame data" << endl;
+        av_frame_free(&frame);
+        avcodec_free_context(&c);
         exit(EXIT_FAILURE);
     }
 
@@ -131,45 +127,69 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // 프레임 캡처 및 인코딩
-    rs2::frameset frames = pipe.wait_for_frames();
-    rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
+    // 소켓을 미리 생성하고 바인딩
+    int sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
+    int sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
-    const int w = color_frame.get_width();
-    const int h = color_frame.get_height();
+    // 서버 주소를 미리 정의
+    struct sockaddr_in servaddr1, servaddr2;
+    memset(&servaddr1, 0, sizeof(servaddr1));
+    servaddr1.sin_family = AF_INET;
+    servaddr1.sin_port = htons(SERVER_PORT);
+    servaddr1.sin_addr.s_addr = inet_addr(SERVER_IP);
 
-    uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
+    memset(&servaddr2, 0, sizeof(servaddr2));
+    servaddr2.sin_family = AF_INET;
+    servaddr2.sin_port = htons(SERVER_PORT + 1);
+    servaddr2.sin_addr.s_addr = inet_addr(SERVER_IP);
 
-    const uint8_t* inData[1] = { rgb_data };
-    int inLinesize[1] = { 3 * w };
+    while (true) {
+        // 프레임 캡처 및 인코딩
+        rs2::frameset frames = pipe.wait_for_frames();
+        rs2::video_frame color_frame = frames.get_color_frame().as<rs2::video_frame>();
 
-    sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
+        const int w = color_frame.get_width();
+        const int h = color_frame.get_height();
 
-    frame->pts = 0;
+        uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
 
-    if (avcodec_send_frame(c, frame) < 0) {
-        cerr << "Error sending a frame for encoding" << endl;
-        exit(EXIT_FAILURE);
+        const uint8_t* inData[1] = { rgb_data };
+        int inLinesize[1] = { 3 * w };
+
+        sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
+
+        frame->pts += 1;
+
+        if (avcodec_send_frame(c, frame) < 0) {
+            cerr << "Error sending a frame for encoding" << endl;
+            break;
+        }
+
+        size_t packet_size = 0;
+        uint8_t* packet_data = nullptr;
+
+        if (avcodec_receive_packet(c, pkt) == 0) {
+            packet_size = pkt->size;
+            packet_data = new uint8_t[packet_size];
+            memcpy(packet_data, pkt->data, packet_size);
+        } else {
+            cerr << "Error receiving encoded packet" << endl;
+            break;
+        }
+
+        // 두 개의 인터페이스로 동일한 패킷 데이터 전송
+        send_packet(sockfd1, servaddr1, packet_data, packet_size);
+        send_packet(sockfd2, servaddr2, packet_data, packet_size);
+
+        // 메모리 정리
+        delete[] packet_data;
     }
 
-    size_t packet_size = 0;
-    uint8_t* packet_data = nullptr;
-
-    if (avcodec_receive_packet(c, pkt) == 0) {
-        packet_size = pkt->size;
-        packet_data = new uint8_t[packet_size];
-        memcpy(packet_data, pkt->data, packet_size);
-    }
-
-    // 스레드를 통해 동일한 패킷 데이터 전송
-    thread interface1_thread(send_packets, INTERFACE1_IP, INTERFACE1_NAME, packet_data, packet_size, SERVER_PORT);
-    thread interface2_thread(send_packets, INTERFACE2_IP, INTERFACE2_NAME, packet_data, packet_size, SERVER_PORT + 1);
-
-    interface1_thread.join();
-    interface2_thread.join();
+    // 소켓 종료
+    close(sockfd1);
+    close(sockfd2);
 
     // 메모리 정리
-    delete[] packet_data;
     av_packet_free(&pkt);
     av_frame_free(&frame);
     avcodec_free_context(&c);
