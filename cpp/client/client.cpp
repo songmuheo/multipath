@@ -1,11 +1,14 @@
 #include <librealsense2/rs.hpp>
 #include <iostream>
 #include <chrono>
+#include <thread>
+#include <atomic>
 #include <cstring>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
 #include <unistd.h>
+#include <memory>
 #include "config.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -15,145 +18,62 @@ extern "C" {
 
 using namespace std;
 
-int create_socket_and_bind(const char* interface_ip, const char* interface_name) {
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
+class VideoStreamer {
+public:
+    VideoStreamer() : frame_counter(0) {
+        codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+        if (!codec) throw runtime_error("Codec not found");
+
+        codec_ctx.reset(avcodec_alloc_context3(codec));
+        if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
+
+        codec_ctx->bit_rate = 400000;
+        codec_ctx->width = WIDTH;
+        codec_ctx->height = HEIGHT;
+        codec_ctx->time_base = { 1, FPS };
+        codec_ctx->framerate = { FPS, 1 };
+        codec_ctx->gop_size = 10;
+        codec_ctx->max_b_frames = 1;
+        codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+
+        if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
+            throw runtime_error("Could not open codec");
+        }
+
+        frame.reset(av_frame_alloc());
+        if (!frame) throw runtime_error("Could not allocate video frame");
+
+        frame->format = codec_ctx->pix_fmt;
+        frame->width = codec_ctx->width;
+        frame->height = codec_ctx->height;
+
+        if (av_frame_get_buffer(frame.get(), 32) < 0) {
+            throw runtime_error("Could not allocate the video frame data");
+        }
+
+        pkt.reset(av_packet_alloc());
+        if (!pkt) throw runtime_error("Could not allocate AVPacket");
+
+        sws_ctx.reset(sws_getContext(
+            codec_ctx->width, codec_ctx->height, AV_PIX_FMT_RGB24,
+            codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+            SWS_BILINEAR, nullptr, nullptr, nullptr));
+
+        if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
+
+        sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
+        sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
+
+        servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
+        servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
     }
 
-    if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
-        perror("SO_BINDTODEVICE failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
+    ~VideoStreamer() {
+        close(sockfd1);
+        close(sockfd2);
     }
 
-    struct sockaddr_in bindaddr = {};
-    bindaddr.sin_family = AF_INET;
-    bindaddr.sin_port = htons(0);
-    bindaddr.sin_addr.s_addr = inet_addr(interface_ip);
-
-    if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
-        perror("Bind failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
-    }
-
-    return sockfd;
-}
-
-void encode_and_send_frame(AVCodecContext* c, AVFrame* frame, AVPacket* pkt, int sockfd1, int sockfd2, struct sockaddr_in* servaddr1, struct sockaddr_in* servaddr2) {
-    if (avcodec_send_frame(c, frame) < 0) {
-        cerr << "Error sending a frame for encoding" << endl;
-        return;
-    }
-
-    int ret;
-    while ((ret = avcodec_receive_packet(c, pkt)) == 0) {
-        sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)servaddr1, sizeof(*servaddr1));
-        sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)servaddr2, sizeof(*servaddr2));
-        av_packet_unref(pkt);
-    }
-
-    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-        cerr << "Error receiving encoded packet" << endl;
-    }
-}
-
-int main() {
-    rs2::pipeline pipe;
-    rs2::config cfg;
-
-    cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_RGB8, FPS);
-    pipe.start(cfg);
-
-    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_H264);
-    if (!codec) {
-        cerr << "Codec not found" << endl;
-        exit(EXIT_FAILURE);
-    }
-
-    AVCodecContext* c = avcodec_alloc_context3(codec);
-    if (!c) {
-        cerr << "Could not allocate video codec context" << endl;
-        exit(EXIT_FAILURE);
-    }
-
-    c->bit_rate = 400000;
-    c->width = WIDTH;
-    c->height = HEIGHT;
-    c->time_base = {1, FPS};
-    c->framerate = {FPS, 1};
-    c->gop_size = 10;
-    c->max_b_frames = 1;
-    c->pix_fmt = AV_PIX_FMT_YUV420P;
-
-    if (avcodec_open2(c, codec, NULL) < 0) {
-        cerr << "Could not open codec" << endl;
-        avcodec_free_context(&c);
-        exit(EXIT_FAILURE);
-    }
-
-    AVFrame* frame = av_frame_alloc();
-    if (!frame) {
-        cerr << "Could not allocate video frame" << endl;
-        avcodec_free_context(&c);
-        exit(EXIT_FAILURE);
-    }
-
-    frame->format = c->pix_fmt;
-    frame->width = c->width;
-    frame->height = c->height;
-
-    if (av_frame_get_buffer(frame, 32) < 0) {
-        cerr << "Could not allocate the video frame data" << endl;
-        av_frame_free(&frame);
-        avcodec_free_context(&c);
-        exit(EXIT_FAILURE);
-    }
-
-    AVPacket* pkt = av_packet_alloc();
-    if (!pkt) {
-        cerr << "Could not allocate AVPacket" << endl;
-        av_frame_free(&frame);
-        avcodec_free_context(&c);
-        exit(EXIT_FAILURE);
-    }
-
-    struct SwsContext* sws_ctx = sws_getContext(
-        c->width, c->height, AV_PIX_FMT_RGB24,
-        c->width, c->height, c->pix_fmt,
-        SWS_BILINEAR, NULL, NULL, NULL
-    );
-
-    if (!sws_ctx) {
-        cerr << "Could not initialize the conversion context" << endl;
-        av_packet_free(&pkt);
-        av_frame_free(&frame);
-        avcodec_free_context(&c);
-        exit(EXIT_FAILURE);
-    }
-
-    int frame_counter = 0;
-    int sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
-    int sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
-
-    struct sockaddr_in servaddr1 = {};
-    servaddr1.sin_family = AF_INET;
-    servaddr1.sin_port = htons(SERVER_PORT);
-    servaddr1.sin_addr.s_addr = inet_addr(SERVER_IP);
-
-    struct sockaddr_in servaddr2 = {};
-    servaddr2.sin_family = AF_INET;
-    servaddr2.sin_port = htons(SERVER_PORT + 1);
-    servaddr2.sin_addr.s_addr = inet_addr(SERVER_IP);
-
-    while (true) {
-        rs2::frameset frames = pipe.wait_for_frames();
-        rs2::video_frame color_frame = frames.get_color_frame();
-
-        if (!color_frame) continue;
-
+    void stream(rs2::video_frame& color_frame) {
         const int w = color_frame.get_width();
         const int h = color_frame.get_height();
 
@@ -162,20 +82,102 @@ int main() {
         const uint8_t* inData[1] = { rgb_data };
         int inLinesize[1] = { 3 * w };
 
-        sws_scale(sws_ctx, inData, inLinesize, 0, h, frame->data, frame->linesize);
+        sws_scale(sws_ctx.get(), inData, inLinesize, 0, h, frame->data, frame->linesize);
 
         frame->pts = frame_counter++;
 
-        encode_and_send_frame(c, frame, pkt, sockfd1, sockfd2, &servaddr1, &servaddr2);
+        encode_and_send_frame();
     }
 
-    close(sockfd1);
-    close(sockfd2);
+private:
+    struct sockaddr_in create_sockaddr(const char* ip, int port) {
+        struct sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = inet_addr(ip);
+        return addr;
+    }
 
-    av_packet_free(&pkt);
-    av_frame_free(&frame);
-    avcodec_free_context(&c);
-    sws_freeContext(sws_ctx);
+    int create_socket_and_bind(const char* interface_ip, const char* interface_name) {
+        int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sockfd < 0) throw runtime_error("Socket creation failed");
 
-    return 0;
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
+            close(sockfd);
+            throw runtime_error("SO_BINDTODEVICE failed");
+        }
+
+        struct sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
+
+        if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
+            close(sockfd);
+            throw runtime_error("Bind failed");
+        }
+
+        return sockfd;
+    }
+
+    void encode_and_send_frame() {
+        if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
+            cerr << "Error sending a frame for encoding" << endl;
+            return;
+        }
+
+        int ret;
+        while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1));
+            sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
+            av_packet_unref(pkt.get());
+        }
+
+        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+            cerr << "Error receiving encoded packet" << endl;
+        }
+    }
+
+    unique_ptr<AVCodecContext, decltype(&avcodec_free_context)> codec_ctx{nullptr, &avcodec_free_context};
+    unique_ptr<AVFrame, decltype(&av_frame_free)> frame{nullptr, &av_frame_free};
+    unique_ptr<AVPacket, decltype(&av_packet_free)> pkt{nullptr, &av_packet_free};
+    unique_ptr<SwsContext, decltype(&sws_freeContext)> sws_ctx{nullptr, &sws_freeContext};
+
+    int sockfd1, sockfd2;
+    struct sockaddr_in servaddr1, servaddr2;
+    atomic<int> frame_counter;
+};
+
+void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
+    while (running.load()) {
+        rs2::frameset frames = pipe.wait_for_frames();
+        rs2::video_frame color_frame = frames.get_color_frame();
+        if (!color_frame) continue;
+
+        streamer.stream(color_frame);
+    }
+}
+
+int main() {
+    try {
+        rs2::pipeline pipe;
+        rs2::config cfg;
+
+        cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_RGB8, FPS);
+        pipe.start(cfg);
+
+        VideoStreamer streamer;
+
+        atomic<bool> running(true);
+        thread capture_thread(frame_capture_thread, ref(streamer), ref(pipe), ref(running));
+
+        // 메인 스레드가 다른 작업을 수행하거나 사용자 입력을 대기
+        // ...
+
+        running.store(false);  // 스레드 종료 신호 전송
+        capture_thread.join();  // 스레드 종료 대기
+    }
+    catch (const exception& e) {
+        cerr << "Error: " << e.what() << endl;
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
