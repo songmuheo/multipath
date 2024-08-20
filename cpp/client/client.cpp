@@ -169,8 +169,9 @@ int main() {
         atomic<bool> running(true);
         thread capture_thread(frame_capture_thread, ref(streamer), ref(pipe), ref(running));
 
-        // 메인 스레드가 다른 작업을 수행하거나 사용자 입력을 대기
-        // ...
+        // 프로그램이 계속 실행되도록 하기 위해, 사용자 입력을 대기합니다.
+        cout << "Press Enter to stop streaming..." << endl;
+        cin.get();  // 사용자가 엔터를 누를 때까지 대기
 
         running.store(false);  // 스레드 종료 신호 전송
         capture_thread.join();  // 스레드 종료 대기
