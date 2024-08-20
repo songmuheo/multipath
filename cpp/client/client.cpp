@@ -135,10 +135,10 @@ private:
         }
     }
 
-    unique_ptr<AVCodecContext, decltype(&avcodec_free_context)> codec_ctx{nullptr, &avcodec_free_context};
-    unique_ptr<AVFrame, decltype(&av_frame_free)> frame{nullptr, &av_frame_free};
-    unique_ptr<AVPacket, decltype(&av_packet_free)> pkt{nullptr, &av_packet_free};
-    unique_ptr<SwsContext, decltype(&sws_freeContext)> sws_ctx{nullptr, &sws_freeContext};
+    unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
+    unique_ptr<AVFrame, void(*)(AVFrame*)> frame{nullptr, [](AVFrame* p) { av_frame_free(&p); }};
+    unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{nullptr, [](AVPacket* p) { av_packet_free(&p); }};
+    unique_ptr<SwsContext, void(*)(SwsContext*)> sws_ctx{nullptr, &sws_freeContext};
 
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
