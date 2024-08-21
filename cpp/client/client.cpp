@@ -9,7 +9,9 @@
 #include <ifaddrs.h>
 #include <unistd.h>
 #include <memory>
+#include <future>
 #include "config.h"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -27,7 +29,7 @@ public:
         codec_ctx.reset(avcodec_alloc_context3(codec));
         if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
 
-        codec_ctx->bit_rate = 400000;
+        codec_ctx->bit_rate = BITRATE;
         codec_ctx->width = WIDTH;
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = { 1, FPS };
@@ -35,6 +37,9 @@ public:
         codec_ctx->gop_size = 10;
         codec_ctx->max_b_frames = 1;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+
+        codec_ctx->thread_count = 4;  // 멀티스레드 활성화
+        av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);  // 인코딩 속도 최적화
 
         if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
             throw runtime_error("Could not open codec");
@@ -54,37 +59,31 @@ public:
         pkt.reset(av_packet_alloc());
         if (!pkt) throw runtime_error("Could not allocate AVPacket");
 
-        sws_ctx.reset(sws_getContext(
-            codec_ctx->width, codec_ctx->height, AV_PIX_FMT_RGB24,
-            codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
-            SWS_BILINEAR, nullptr, nullptr, nullptr));
-
-        if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
-
         sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
         sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
         servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
         servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
+
+        sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
     }
 
     ~VideoStreamer() {
         close(sockfd1);
         close(sockfd2);
+        sws_freeContext(sws_ctx);
     }
 
     void stream(rs2::video_frame& color_frame) {
-        const int w = color_frame.get_width();
-        const int h = color_frame.get_height();
-
-        uint8_t* rgb_data = (uint8_t*)color_frame.get_data();
-
-        const uint8_t* inData[1] = { rgb_data };
-        int inLinesize[1] = { 3 * w };
-
-        sws_scale(sws_ctx.get(), inData, inLinesize, 0, h, frame->data, frame->linesize);
-
         frame->pts = frame_counter++;
+
+        uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
+
+        // YUYV 데이터를 YUV420P 형식으로 변환하여 AVFrame에 복사
+        const uint8_t* src_slices[1] = { yuyv_data };
+        int src_stride[1] = { 2 * WIDTH };
+        sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
 
         encode_and_send_frame();
     }
@@ -125,8 +124,23 @@ private:
 
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-            sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1));
-            sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2));
+            // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
+            auto send_task1 = async(launch::async, [this] {
+                if (sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+                    cerr << "Error sending packet on interface 1" << endl;
+                }
+            });
+
+            auto send_task2 = async(launch::async, [this] {
+                if (sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+                    cerr << "Error sending packet on interface 2" << endl;
+                }
+            });
+
+            // 전송이 완료될 때까지 대기
+            send_task1.get();
+            send_task2.get();
+
             av_packet_unref(pkt.get());
         }
 
@@ -139,7 +153,8 @@ private:
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
     unique_ptr<AVFrame, void(*)(AVFrame*)> frame{nullptr, [](AVFrame* p) { av_frame_free(&p); }};
     unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{nullptr, [](AVPacket* p) { av_packet_free(&p); }};
-    unique_ptr<SwsContext, void(*)(SwsContext*)> sws_ctx{nullptr, &sws_freeContext};
+
+    SwsContext* sws_ctx = nullptr;
 
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
@@ -148,11 +163,13 @@ private:
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
     while (running.load()) {
-        rs2::frameset frames = pipe.wait_for_frames();
-        rs2::video_frame color_frame = frames.get_color_frame();
-        if (!color_frame) continue;
+        rs2::frameset frames;
+        if (pipe.poll_for_frames(&frames)) {
+            rs2::video_frame color_frame = frames.get_color_frame();
+            if (!color_frame) continue;
 
-        streamer.stream(color_frame);
+            streamer.stream(color_frame);
+        }
     }
 }
 
@@ -161,7 +178,7 @@ int main() {
         rs2::pipeline pipe;
         rs2::config cfg;
 
-        cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_RGB8, FPS);
+        cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
         pipe.start(cfg);
 
         VideoStreamer streamer;
@@ -169,12 +186,11 @@ int main() {
         atomic<bool> running(true);
         thread capture_thread(frame_capture_thread, ref(streamer), ref(pipe), ref(running));
 
-        // 프로그램이 계속 실행되도록 하기 위해, 사용자 입력을 대기합니다.
         cout << "Press Enter to stop streaming..." << endl;
-        cin.get();  // 사용자가 엔터를 누를 때까지 대기
+        cin.get();
 
-        running.store(false);  // 스레드 종료 신호 전송
-        capture_thread.join();  // 스레드 종료 대기
+        running.store(false);
+        capture_thread.join();
     }
     catch (const exception& e) {
         cerr << "Error: " << e.what() << endl;
