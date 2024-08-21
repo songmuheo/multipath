@@ -35,7 +35,7 @@ public:
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = { 1, FPS };
         codec_ctx->framerate = { FPS, 1 };
-        codec_ctx->gop_size = 10;
+        codec_ctx->gop_size = 10; // Group of Pictures -> 10 frames 마다 key frame 생성
         codec_ctx->max_b_frames = 1;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
