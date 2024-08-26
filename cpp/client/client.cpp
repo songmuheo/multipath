@@ -73,11 +73,11 @@ public:
         avformat_alloc_output_context2(&format_ctx, nullptr, nullptr, "output.mp4");
         if (!format_ctx) throw runtime_error("Could not allocate output format context");
 
-        stream = avformat_new_stream(format_ctx, nullptr);
-        if (!stream) throw runtime_error("Could not create new stream");
+        video_stream = avformat_new_stream(format_ctx, nullptr);
+        if (!video_stream) throw runtime_error("Could not create new stream");
 
-        stream->time_base = { 1, FPS };
-        avcodec_parameters_from_context(stream->codecpar, codec_ctx.get());
+        video_stream->time_base = { 1, FPS };
+        avcodec_parameters_from_context(video_stream->codecpar, codec_ctx.get());
 
         if (!(format_ctx->oformat->flags & AVFMT_NOFILE)) {
             if (avio_open(&format_ctx->pb, "output.mp4", AVIO_FLAG_WRITE) < 0) {
@@ -188,7 +188,7 @@ private:
     }
 
     void write_packet_to_file() {
-        pkt->stream_index = stream->index;
+        pkt->stream_index = video_stream->index;
         if (av_interleaved_write_frame(format_ctx, pkt.get()) < 0) {
             cerr << "Error writing packet to file" << endl;
         }
@@ -207,7 +207,7 @@ private:
 
     // MP4 파일 저장을 위한 멤버 변수들
     AVFormatContext* format_ctx = nullptr;
-    AVStream* stream = nullptr;
+    AVStream* video_stream = nullptr; // 변경된 변수 이름
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
