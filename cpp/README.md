@@ -27,10 +27,24 @@ Server에서는 패킷을 수신할 때 헤더에서 Interface ID와 Sequence nu
 
 #### Version2
 
-Client - realsense pipeline을 thread 실행 내에서 처리해서, thread마다 완전히 같은 frame을 capture하지 않을 수 있음. 따라서, 전송되는 패킷이 완전히 같은 패킷이 아닐 확률이 높고, 디코딩시 오류가 있을 확률이 높음.
-thread로 작업을 나누기 이전에 pipeline과 frame capture를 완료하고, thread에서는 전송만 담당
+Client - 
 
-Server - 패킷을 잘 나눠서 디코딩? 하나만 받았을 때, 두개 다 이용했을 때 나눌 수 있도록 패킷을 저장해줌 ....? 혹은 이는 Wireshark에서 처리해줄것이니, Packet을 수신해주기만 하면 되나?
+기존의 오류: realsense pipeline을 thread 실행 내에서 처리해서, thread마다 완전히 같은 frame을 capture하지 않을 수 있음. 따라서, 전송되는 패킷이 완전히 같은 패킷이 아닐 확률이 높고, 디코딩시 오류가 있을 확률이 높음.
+
+thread로 작업을 나누기 이전에 pipeline과 frame capture를 완료하고, thread에서는 전송만 담당하도록 설정
+
+즉, librealsense에서 video 받아오고, ffmpeg으로 H.264인코딩하고, 두 개의 인터페이스로 이 인코딩한 같은 패킷을 전송함. 이 때, 전송을 위한 프로토콜은 단순히 UDP를 사용하였음
+
+
+
+Server -
+
+각 포트에 들어온 (즉, 두 인터페이스에서 보낸) UDP 패킷을 단순히 디코딩하고, openCV window에 표시 및 저장한다. 두 패킷의 latency를 고려하여 하나의 영상으로 합치는 코드는 아직 작성하지 않았음.
+
+#### Version3
+
+목표: 
+Streaming protocol을 이용한 구현, 두 인터페이스로부터 수신한 패킷을 latency를 고려하여 하나의 최적화된 영상으로 만들기. 
 
 ### Client
 ```
