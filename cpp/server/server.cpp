@@ -1,9 +1,12 @@
+
 #include <iostream>
 #include <fstream>
 #include <thread>
 #include <atomic>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 #include <vector>
-#include <chrono>
 #include <arpa/inet.h>
 #include <opencv2/opencv.hpp>
 #include <unistd.h>
@@ -18,8 +21,8 @@ using namespace std;
 
 class VideoReceiver {
 public:
-    VideoReceiver(int port, const string& output_filename)
-        : port(port), output_filename(output_filename), running(true) {
+    VideoReceiver(int port, const string& output_filename, const string& window_name)
+        : port(port), output_filename(output_filename), window_name(window_name), running(true) {
         sockfd = socket(AF_INET, SOCK_DGRAM, 0);
         if (sockfd < 0) {
             perror("Socket creation failed");
@@ -46,7 +49,6 @@ public:
         }
 
         // FFmpeg 초기화
-        avcodec_register_all();
         codec = avcodec_find_decoder(AV_CODEC_ID_H264);
         if (!codec) {
             cerr << "Codec not found" << endl;
@@ -75,12 +77,18 @@ public:
             cerr << "Could not allocate AVPacket" << endl;
             exit(EXIT_FAILURE);
         }
+
+        // OpenCV 창 초기화
+        cv::namedWindow(window_name, cv::WINDOW_NORMAL);
     }
 
     ~VideoReceiver() {
         running = false;
         if (recv_thread.joinable()) {
             recv_thread.join();
+        }
+        if (decode_thread.joinable()) {
+            decode_thread.join();
         }
         output_file.close();
         close(sockfd);
@@ -90,17 +98,15 @@ public:
     }
 
     void start() {
-        recv_thread = thread(&VideoReceiver::receive_and_save, this);
+        recv_thread = thread(&VideoReceiver::receive_packets, this);
+        decode_thread = thread(&VideoReceiver::decode_and_display, this);
     }
 
-    void receive_and_save() {
+private:
+    void receive_packets() {
         char buffer[PACKET_SIZE];
         socklen_t len;
         struct sockaddr_in cliaddr;
-        struct SwsContext* sws_ctx = nullptr;
-        cv::Mat img;
-
-        cv::namedWindow("Video", cv::WINDOW_NORMAL);
 
         while (running) {
             len = sizeof(cliaddr);
@@ -109,33 +115,56 @@ public:
                 // 수신된 데이터를 파일에 저장
                 output_file.write(buffer, n);
 
-                // 패킷 설정
-                pkt->data = reinterpret_cast<uint8_t*>(buffer);
-                pkt->size = n;
+                // 패킷 큐에 추가
+                unique_lock<mutex> lock(queue_mutex);
+                packet_queue.push(vector<uint8_t>(buffer, buffer + n));
+                queue_cond.notify_one();
+            }
+        }
+    }
 
-                // 디코딩
-                if (avcodec_send_packet(codec_ctx, pkt) >= 0) {
-                    while (avcodec_receive_frame(codec_ctx, frame) >= 0) {
-                        // 스케일링 설정
-                        if (!sws_ctx) {
-                            sws_ctx = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
-                                                     codec_ctx->width, codec_ctx->height, AV_PIX_FMT_BGR24,
-                                                     SWS_BILINEAR, nullptr, nullptr, nullptr);
+    void decode_and_display() {
+        struct SwsContext* sws_ctx = nullptr;
+        cv::Mat img;
 
-                            img = cv::Mat(codec_ctx->height, codec_ctx->width, CV_8UC3);
-                        }
+        while (running) {
+            vector<uint8_t> packet_data;
 
-                        // 프레임을 BGR로 변환
-                        uint8_t* data[1] = { img.data };
-                        int linesize[1] = { static_cast<int>(img.step1()) };
-                        sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, data, linesize);
+            // 패킷을 큐에서 가져오기
+            {
+                unique_lock<mutex> lock(queue_mutex);
+                queue_cond.wait(lock, [this] { return !packet_queue.empty() || !running; });
+                if (!running && packet_queue.empty()) break;
+                packet_data = packet_queue.front();
+                packet_queue.pop();
+            }
 
-                        // 비디오 창에 표시
-                        cv::imshow("Video", img);
-                        if (cv::waitKey(1) == 27) {  // ESC 키를 누르면 종료
-                            running = false;
-                            break;
-                        }
+            // 패킷 설정
+            pkt->data = packet_data.data();
+            pkt->size = packet_data.size();
+
+            // 디코딩
+            if (avcodec_send_packet(codec_ctx, pkt) >= 0) {
+                while (avcodec_receive_frame(codec_ctx, frame) >= 0) {
+                    // 스케일링 설정
+                    if (!sws_ctx) {
+                        sws_ctx = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
+                                                 codec_ctx->width, codec_ctx->height, AV_PIX_FMT_BGR24,
+                                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+
+                        img = cv::Mat(codec_ctx->height, codec_ctx->width, CV_8UC3);
+                    }
+
+                    // 프레임을 BGR로 변환
+                    uint8_t* data[1] = { img.data };
+                    int linesize[1] = { static_cast<int>(img.step1()) };
+                    sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, data, linesize);
+
+                    // 비디오 창에 표시
+                    cv::imshow(window_name, img);
+                    if (cv::waitKey(1) == 27) {  // ESC 키를 누르면 종료
+                        running = false;
+                        break;
                     }
                 }
             }
@@ -146,13 +175,17 @@ public:
         }
     }
 
-private:
     int sockfd;
     int port;
     string output_filename;
+    string window_name;
     ofstream output_file;
     atomic<bool> running;
     thread recv_thread;
+    thread decode_thread;
+    queue<vector<uint8_t>> packet_queue;
+    mutex queue_mutex;
+    condition_variable queue_cond;
     struct sockaddr_in servaddr;
 
     // FFmpeg 관련 변수
@@ -163,9 +196,9 @@ private:
 };
 
 int main() {
-    // 두 개의 비디오 수신기를 각각의 포트에서 실행
-    VideoReceiver receiver1(SERVER_PORT, "output_video1.h264");
-    VideoReceiver receiver2(SERVER_PORT + 1, "output_video2.h264");
+    // 두 개의 비디오 수신기를 각각의 포트에서 실행, 서로 다른 OpenCV 창 이름 사용
+    VideoReceiver receiver1(SERVER_PORT, "LGUp.h264", "LGU+");
+    VideoReceiver receiver2(SERVER_PORT + 1, "KT.h264", "KT");
 
     receiver1.start();
     receiver2.start();
