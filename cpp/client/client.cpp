@@ -68,9 +68,43 @@ public:
 
         sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
+
+        // MP4 파일을 위한 포맷 컨텍스트 초기화
+        avformat_alloc_output_context2(&format_ctx, nullptr, nullptr, "output.mp4");
+        if (!format_ctx) throw runtime_error("Could not allocate output format context");
+
+        stream = avformat_new_stream(format_ctx, nullptr);
+        if (!stream) throw runtime_error("Could not create new stream");
+
+        stream->time_base = { 1, FPS };
+        avcodec_parameters_from_context(stream->codecpar, codec_ctx.get());
+
+        if (!(format_ctx->oformat->flags & AVFMT_NOFILE)) {
+            if (avio_open(&format_ctx->pb, "output.mp4", AVIO_FLAG_WRITE) < 0) {
+                throw runtime_error("Could not open output file");
+            }
+        }
+
+        if (avformat_write_header(format_ctx, nullptr) < 0) {
+            throw runtime_error("Error occurred when writing header to output file");
+        }
     }
 
     ~VideoStreamer() {
+        // 인코딩 종료 및 파일 마무리
+        avcodec_send_frame(codec_ctx.get(), nullptr); // Flush the encoder
+        while (avcodec_receive_packet(codec_ctx.get(), pkt.get()) == 0) {
+            write_packet_to_file();
+        }
+
+        av_write_trailer(format_ctx);
+
+        if (!(format_ctx->oformat->flags & AVFMT_NOFILE)) {
+            avio_closep(&format_ctx->pb);
+        }
+
+        avformat_free_context(format_ctx);
+
         close(sockfd1);
         close(sockfd2);
         sws_freeContext(sws_ctx);
@@ -125,7 +159,7 @@ private:
 
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-            // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
+            // 네트워크로 패킷 전송
             auto send_task1 = async(launch::async, [this] {
                 if (sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
                     cerr << "Error sending packet on interface 1" << endl;
@@ -137,6 +171,9 @@ private:
                     cerr << "Error sending packet on interface 2" << endl;
                 }
             });
+
+            // 파일로 패킷 저장
+            write_packet_to_file();
 
             // 전송이 완료될 때까지 대기
             send_task1.get();
@@ -150,6 +187,13 @@ private:
         }
     }
 
+    void write_packet_to_file() {
+        pkt->stream_index = stream->index;
+        if (av_interleaved_write_frame(format_ctx, pkt.get()) < 0) {
+            cerr << "Error writing packet to file" << endl;
+        }
+    }
+
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
     unique_ptr<AVFrame, void(*)(AVFrame*)> frame{nullptr, [](AVFrame* p) { av_frame_free(&p); }};
@@ -160,6 +204,10 @@ private:
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
+
+    // MP4 파일 저장을 위한 멤버 변수들
+    AVFormatContext* format_ctx = nullptr;
+    AVStream* stream = nullptr;
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
