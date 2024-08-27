@@ -21,6 +21,11 @@ extern "C" {
 
 using namespace std;
 
+struct PacketHeader {
+    uint64_t timestamp; // 8 bytes
+    uint32_t sequence_number; // 4 bytes
+};
+
 class VideoStreamer {
 public:
     VideoStreamer() : frame_counter(0) {
@@ -125,6 +130,17 @@ private:
 
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+            // 사용자 정의 패킷 헤더 생성
+            PacketHeader header;
+            header.timestamp = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
+            header.sequence_number = frame_counter;
+
+            // 헤더와 실제 H.264 데이터 결합
+            vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
+            memcpy(packet_data.data(), &header, sizeof(PacketHeader));
+            memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
+            
+            
             // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
             auto send_task1 = async(launch::async, [this] {
                 if (sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {

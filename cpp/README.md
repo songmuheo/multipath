@@ -46,7 +46,7 @@ Server -
 목표: 
 Streaming protocol을 이용한 구현, 두 인터페이스로부터 수신한 패킷을 latency를 고려하여 하나의 최적화된 영상으로 만들기.
 
-Wireshark를 이용하여 Latency, Delay 등 성능 측정
+*수정: Streaming protocol이 아닌, App단에서 직접 코딩해서 Latency, Loss 측정 및 하나의 영상 만들기
 
 ### Client
 ```
