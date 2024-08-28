@@ -163,7 +163,6 @@ private:
 
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             cerr << "Error receiving encoded packet" << endl;
-            
         }
     }
 
