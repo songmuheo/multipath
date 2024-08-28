@@ -162,7 +162,7 @@ private:
         }
 
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-            cerr << "Error receiving encoded packet" << endl;
+            cerr << "Error receiving encoded packet: " << av_err2str(ret) << endl;
         }
     }
 
