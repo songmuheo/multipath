@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <memory>
 #include <future>
+#include <cerrno>
+#include <cstring>
 #include "config.h"
 
 extern "C" {
@@ -144,13 +146,13 @@ private:
             // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
-                    cerr << "Error sending packet on interface 1" << endl;
+                    cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
                 }
             });
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
-                    cerr << "Error sending packet on interface 2" << endl;
+                    cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
                 }
             });
 
