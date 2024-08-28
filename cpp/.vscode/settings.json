@@ -2,6 +2,8 @@
     "files.associations": {
         "optional": "cpp",
         "variant": "cpp",
-        "ostream": "cpp"
+        "ostream": "cpp",
+        "atomic": "cpp",
+        "future": "cpp"
     }
 }

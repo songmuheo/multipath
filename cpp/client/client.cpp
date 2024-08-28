@@ -132,24 +132,24 @@ private:
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             // 사용자 정의 패킷 헤더 생성
             PacketHeader header;
-            header.timestamp = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
-            header.sequence_number = frame_counter;
+            header.timestamp = chrono::duration_cast<chrono::microseconds>(
+                chrono::system_clock::now().time_since_epoch()).count();
+            header.sequence_number = frame_counter.fetch_add(1);
 
             // 헤더와 실제 H.264 데이터 결합
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-            
-            
+
             // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
-            auto send_task1 = async(launch::async, [this] {
-                if (sendto(sockfd1, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+            auto send_task1 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
                     cerr << "Error sending packet on interface 1" << endl;
                 }
             });
 
-            auto send_task2 = async(launch::async, [this] {
-                if (sendto(sockfd2, pkt->data, pkt->size, 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+            auto send_task2 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
                     cerr << "Error sending packet on interface 2" << endl;
                 }
             });
