@@ -30,7 +30,7 @@ struct PacketHeader {
 
 class VideoStreamer {
 public:
-    VideoStreamer() : frame_counter(0) {
+    VideoStreamer() : frame_counter(0), sequence_number(0) {
         codec = avcodec_find_encoder(AV_CODEC_ID_H264);
         if (!codec) throw runtime_error("Codec not found");
 
@@ -136,7 +136,7 @@ private:
             PacketHeader header;
             header.timestamp = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
-            header.sequence_number = frame_counter.fetch_add(1);
+            header.sequence_number = sequence_number++;
 
             // 헤더와 실제 H.264 데이터 결합
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
@@ -178,6 +178,7 @@ private:
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
+    atomic<int> sequence_number;
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {

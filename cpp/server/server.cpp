@@ -79,7 +79,7 @@ void decode_and_display(AVCodecContext* codec_ctx, SwsContext*& sws_ctx, std::ve
             cv::waitKey(1);
 
             // Save frame to file
-            cv::imwrite(window_name + "_frame_" + std::to_string(header.sequence_number) + ".jpg", mat);
+            // cv::imwrite(window_name + "_frame_" + std::to_string(header.sequence_number) + ".jpg", mat);
 
             av_frame_free(&bgr_frame);
         }
@@ -250,8 +250,8 @@ void run_server() {
     }
 
     // Prepare for display using OpenCV
-    cv::namedWindow("Socket1_Stream", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("Socket2_Stream", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
     cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
 
     // Start threads for handling each socket
@@ -259,7 +259,7 @@ void run_server() {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
         while (true) {
-            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "Socket1_Stream");
+            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
         }
     });
 
@@ -267,7 +267,7 @@ void run_server() {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
         while (true) {
-            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "Socket2_Stream");
+            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
         }
     });
 
