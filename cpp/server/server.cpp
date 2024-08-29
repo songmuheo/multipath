@@ -1,211 +1,294 @@
-
 #include <iostream>
 #include <fstream>
+#include <unordered_map>
+#include <unordered_set>
+#include <chrono>
 #include <thread>
-#include <atomic>
-#include <queue>
 #include <mutex>
-#include <condition_variable>
-#include <vector>
+#include <cstring>
+#include <atomic>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <opencv2/opencv.hpp>
-#include <unistd.h>
+#include <sys/select.h>
+#include <unistd.h> // close 함수를 위해 추가된 헤더 파일
+#include <vector>   // vector 사용을 위한 헤더 파일
+#include <string>   // string 사용을 위한 헤더 파일
+#include <algorithm> // max 사용을 위한 헤더 파일
+
 #include "config.h"
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <libavutil/opt.h>
+#include <libavutil/imgutils.h>
 }
 
-using namespace std;
+// Packet header structure
+struct PacketHeader {
+    uint64_t timestamp;
+    uint32_t sequence_number;
+};
 
-class VideoReceiver {
-public:
-    VideoReceiver(int port, const string& output_filename, const string& window_name)
-        : port(port), output_filename(output_filename), window_name(window_name), running(true) {
-        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (sockfd < 0) {
-            perror("Socket creation failed");
-            exit(EXIT_FAILURE);
+// Global variables for state management
+std::unordered_map<uint32_t, uint64_t> packet_arrival_time;
+std::unordered_set<uint32_t> processed_sequences;
+std::mutex packet_mutex;
+
+// Function to log packet information
+void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label) {
+    std::ofstream log_file(video_label + "_packet_log.txt", std::ios_base::app);
+    log_file << "Source IP: " << source_ip << ", Sequence Number: " << sequence_number
+             << ", Latency: " << latency << " ms" << std::endl;
+}
+
+// Function to decode and display video
+void decode_and_display(AVCodecContext* codec_ctx, SwsContext*& sws_ctx, std::vector<uint8_t>& buffer, const PacketHeader& header, const std::string& window_name) {
+    AVPacket* pkt = av_packet_alloc();
+    av_new_packet(pkt, buffer.size() - sizeof(PacketHeader));
+    memcpy(pkt->data, buffer.data() + sizeof(PacketHeader), buffer.size() - sizeof(PacketHeader));
+
+    if (avcodec_send_packet(codec_ctx, pkt) == 0) {
+        AVFrame* frame = av_frame_alloc();
+        if (avcodec_receive_frame(codec_ctx, frame) == 0) {
+            // Check if sws_ctx is already initialized
+            if (!sws_ctx) {
+                sws_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
+                                         frame->width, frame->height, AV_PIX_FMT_BGR24,
+                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
+                if (!sws_ctx) {
+                    std::cerr << "Could not initialize the conversion context" << std::endl;
+                    av_frame_free(&frame);
+                    av_packet_free(&pkt);
+                    return;
+                }
+            }
+
+            cv::Mat mat(frame->height, frame->width, CV_8UC3);
+            AVFrame* bgr_frame = av_frame_alloc();
+            int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_BGR24, frame->width, frame->height, 1);
+            std::vector<uint8_t> bgr_buffer(num_bytes);
+            av_image_fill_arrays(bgr_frame->data, bgr_frame->linesize, bgr_buffer.data(), AV_PIX_FMT_BGR24, frame->width, frame->height, 1);
+
+            sws_scale(sws_ctx, frame->data, frame->linesize, 0, frame->height, bgr_frame->data, bgr_frame->linesize);
+            memcpy(mat.data, bgr_frame->data[0], num_bytes);
+
+            cv::imshow(window_name, mat);
+            cv::waitKey(1);
+
+            // Save frame to file
+            cv::imwrite(window_name + "_frame_" + std::to_string(header.sequence_number) + ".jpg", mat);
+
+            av_frame_free(&bgr_frame);
         }
-
-        memset(&servaddr, 0, sizeof(servaddr));
-
-        servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(port);
-        servaddr.sin_addr.s_addr = inet_addr(SERVER_IP);
-
-        if (bind(sockfd, (const struct sockaddr*)&servaddr, sizeof(servaddr)) < 0) {
-            perror("Bind failed");
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        output_file.open(output_filename, ios::out | ios::binary);
-        if (!output_file.is_open()) {
-            cerr << "Could not open output file: " << output_filename << endl;
-            close(sockfd);
-            exit(EXIT_FAILURE);
-        }
-
-        // FFmpeg 초기화
-        codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-        if (!codec) {
-            cerr << "Codec not found" << endl;
-            exit(EXIT_FAILURE);
-        }
-
-        codec_ctx = avcodec_alloc_context3(codec);
-        if (!codec_ctx) {
-            cerr << "Could not allocate video codec context" << endl;
-            exit(EXIT_FAILURE);
-        }
-
-        if (avcodec_open2(codec_ctx, codec, NULL) < 0) {
-            cerr << "Could not open codec" << endl;
-            exit(EXIT_FAILURE);
-        }
-
-        frame = av_frame_alloc();
-        if (!frame) {
-            cerr << "Could not allocate video frame" << endl;
-            exit(EXIT_FAILURE);
-        }
-
-        pkt = av_packet_alloc();
-        if (!pkt) {
-            cerr << "Could not allocate AVPacket" << endl;
-            exit(EXIT_FAILURE);
-        }
-
-        // OpenCV 창 초기화
-        cv::namedWindow(window_name, cv::WINDOW_NORMAL);
-    }
-
-    ~VideoReceiver() {
-        running = false;
-        if (recv_thread.joinable()) {
-            recv_thread.join();
-        }
-        if (decode_thread.joinable()) {
-            decode_thread.join();
-        }
-        output_file.close();
-        close(sockfd);
         av_frame_free(&frame);
-        av_packet_free(&pkt);
-        avcodec_free_context(&codec_ctx);
     }
+    av_packet_free(&pkt);
+}
 
-    void start() {
-        recv_thread = thread(&VideoReceiver::receive_packets, this);
-        decode_thread = thread(&VideoReceiver::decode_and_display, this);
+// Function to process packets from each socket
+void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_len, AVCodecContext* codec_ctx, SwsContext*& sws_ctx, const std::string& window_name) {
+    std::vector<uint8_t> buffer(BUFFER_SIZE);
+    int len = recvfrom(sockfd, buffer.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+    if (len > 0) {
+        PacketHeader header;
+        memcpy(&header, buffer.data(), sizeof(PacketHeader));
+
+        std::string source_ip = inet_ntoa(client_addr.sin_addr);
+        uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        double latency = (receive_time - header.timestamp) / 1000.0;  // Convert to milliseconds
+
+        // Log packet information for the specific socket
+        log_packet_info(source_ip, header.sequence_number, latency, window_name);
+
+        // Decode and display the video
+        decode_and_display(codec_ctx, sws_ctx, buffer, header, window_name);
     }
+}
 
-private:
-    void receive_packets() {
-        char buffer[PACKET_SIZE];
-        socklen_t len;
-        struct sockaddr_in cliaddr;
+// Function to process packets using select() for non-blocking I/O
+void process_combined_packets(int sockfd1, int sockfd2, AVCodecContext* codec_ctx, SwsContext*& sws_ctx) {
+    fd_set read_fds;
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
 
-        while (running) {
-            len = sizeof(cliaddr);
-            int n = recvfrom(sockfd, buffer, PACKET_SIZE, 0, (struct sockaddr*)&cliaddr, &len);
-            if (n > 0) {
-                // 수신된 데이터를 파일에 저장
-                output_file.write(buffer, n);
+    std::vector<uint8_t> buffer1(BUFFER_SIZE), buffer2(BUFFER_SIZE);
 
-                // 패킷 큐에 추가
-                unique_lock<mutex> lock(queue_mutex);
-                packet_queue.push(vector<uint8_t>(buffer, buffer + n));
-                queue_cond.notify_one();
-            }
-        }
-    }
+    while (true) {
+        // Initialize the set of active sockets
+        FD_ZERO(&read_fds);
+        FD_SET(sockfd1, &read_fds);
+        FD_SET(sockfd2, &read_fds);
 
-    void decode_and_display() {
-        struct SwsContext* sws_ctx = nullptr;
-        cv::Mat img;
+        int max_sd = std::max(sockfd1, sockfd2);
 
-        while (running) {
-            vector<uint8_t> packet_data;
+        // Select system call to monitor multiple file descriptors
+        int activity = select(max_sd + 1, &read_fds, nullptr, nullptr, nullptr);
 
-            // 패킷을 큐에서 가져오기
-            {
-                unique_lock<mutex> lock(queue_mutex);
-                queue_cond.wait(lock, [this] { return !packet_queue.empty() || !running; });
-                if (!running && packet_queue.empty()) break;
-                packet_data = packet_queue.front();
-                packet_queue.pop();
-            }
+        if (activity > 0) {
+            if (FD_ISSET(sockfd1, &read_fds)) {
+                int len1 = recvfrom(sockfd1, buffer1.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+                if (len1 > 0) {
+                    PacketHeader header;
+                    memcpy(&header, buffer1.data(), sizeof(PacketHeader));
 
-            // 패킷 설정
-            pkt->data = packet_data.data();
-            pkt->size = packet_data.size();
+                    std::string source_ip = inet_ntoa(client_addr.sin_addr);
+                    uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    double latency = (receive_time - header.timestamp) / 1000.0;
 
-            // 디코딩
-            if (avcodec_send_packet(codec_ctx, pkt) >= 0) {
-                while (avcodec_receive_frame(codec_ctx, frame) >= 0) {
-                    // 스케일링 설정
-                    if (!sws_ctx) {
-                        sws_ctx = sws_getContext(codec_ctx->width, codec_ctx->height, codec_ctx->pix_fmt,
-                                                 codec_ctx->width, codec_ctx->height, AV_PIX_FMT_BGR24,
-                                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    bool is_first_arrival = false;
 
-                        img = cv::Mat(codec_ctx->height, codec_ctx->width, CV_8UC3);
+                    {
+                        std::lock_guard<std::mutex> lock(packet_mutex);
+                        if (processed_sequences.count(header.sequence_number) == 0) {
+                            processed_sequences.insert(header.sequence_number);
+                            packet_arrival_time[header.sequence_number] = receive_time;
+                            is_first_arrival = true;
+                        } else if (receive_time < packet_arrival_time[header.sequence_number]) {
+                            packet_arrival_time[header.sequence_number] = receive_time;
+                            is_first_arrival = true;
+                        }
                     }
 
-                    // 프레임을 BGR로 변환
-                    uint8_t* data[1] = { img.data };
-                    int linesize[1] = { static_cast<int>(img.step1()) };
-                    sws_scale(sws_ctx, frame->data, frame->linesize, 0, codec_ctx->height, data, linesize);
+                    if (is_first_arrival) {
+                        log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream");
+                        decode_and_display(codec_ctx, sws_ctx, buffer1, header, "Combined_Stream");
+                    }
+                }
+            }
 
-                    // 비디오 창에 표시
-                    cv::imshow(window_name, img);
-                    if (cv::waitKey(1) == 27) {  // ESC 키를 누르면 종료
-                        running = false;
-                        break;
+            if (FD_ISSET(sockfd2, &read_fds)) {
+                int len2 = recvfrom(sockfd2, buffer2.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+                if (len2 > 0) {
+                    PacketHeader header;
+                    memcpy(&header, buffer2.data(), sizeof(PacketHeader));
+
+                    std::string source_ip = inet_ntoa(client_addr.sin_addr);
+                    uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                    double latency = (receive_time - header.timestamp) / 1000.0;
+
+                    bool is_first_arrival = false;
+
+                    {
+                        std::lock_guard<std::mutex> lock(packet_mutex);
+                        if (processed_sequences.count(header.sequence_number) == 0) {
+                            processed_sequences.insert(header.sequence_number);
+                            packet_arrival_time[header.sequence_number] = receive_time;
+                            is_first_arrival = true;
+                        } else if (receive_time < packet_arrival_time[header.sequence_number]) {
+                            packet_arrival_time[header.sequence_number] = receive_time;
+                            is_first_arrival = true;
+                        }
+                    }
+
+                    if (is_first_arrival) {
+                        log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream");
+                        decode_and_display(codec_ctx, sws_ctx, buffer2, header, "Combined_Stream");
                     }
                 }
             }
         }
 
-        if (sws_ctx) {
-            sws_freeContext(sws_ctx);
-        }
+        // Add a small sleep to prevent busy waiting
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void run_server() {
+    // Initialize FFmpeg and other settings
+    SwsContext* sws_ctx = nullptr; // Only declared once here
+
+    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    if (!codec) {
+        std::cerr << "Codec not found" << std::endl;
+        return;
     }
 
-    int sockfd;
-    int port;
-    string output_filename;
-    string window_name;
-    ofstream output_file;
-    atomic<bool> running;
-    thread recv_thread;
-    thread decode_thread;
-    queue<vector<uint8_t>> packet_queue;
-    mutex queue_mutex;
-    condition_variable queue_cond;
-    struct sockaddr_in servaddr;
+    AVCodecContext* codec_ctx1 = avcodec_alloc_context3(codec);
+    AVCodecContext* codec_ctx2 = avcodec_alloc_context3(codec);
+    AVCodecContext* codec_ctx_combined = avcodec_alloc_context3(codec);
 
-    // FFmpeg 관련 변수
-    AVCodec* codec;
-    AVCodecContext* codec_ctx;
-    AVFrame* frame;
-    AVPacket* pkt;
-};
+    if (!codec_ctx1 || !codec_ctx2 || !codec_ctx_combined) {
+        std::cerr << "Could not allocate video codec context" << std::endl;
+        return;
+    }
+
+    if (avcodec_open2(codec_ctx1, codec, nullptr) < 0 ||
+        avcodec_open2(codec_ctx2, codec, nullptr) < 0 ||
+        avcodec_open2(codec_ctx_combined, codec, nullptr) < 0) {
+        std::cerr << "Could not open codec" << std::endl;
+        return;
+    }
+
+    // Setup sockets
+    int sockfd1 = socket(AF_INET, SOCK_DGRAM, 0);
+    int sockfd2 = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd1 < 0 || sockfd2 < 0) {
+        std::cerr << "Socket creation failed" << std::endl;
+        return;
+    }
+
+    struct sockaddr_in servaddr1 = {};
+    servaddr1.sin_family = AF_INET;
+    servaddr1.sin_addr.s_addr = INADDR_ANY;
+    servaddr1.sin_port = htons(SERVER_PORT1);
+
+    struct sockaddr_in servaddr2 = {};
+    servaddr2.sin_family = AF_INET;
+    servaddr2.sin_addr.s_addr = INADDR_ANY;
+    servaddr2.sin_port = htons(SERVER_PORT2);
+
+    if (bind(sockfd1, (struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+        std::cerr << "Bind failed on port " << SERVER_PORT1 << std::endl;
+        return;
+    }
+    if (bind(sockfd2, (struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+        std::cerr << "Bind failed on port " << SERVER_PORT2 << std::endl;
+        return;
+    }
+
+    // Prepare for display using OpenCV
+    cv::namedWindow("Socket1_Stream", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("Socket2_Stream", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
+
+    // Start threads for handling each socket
+    std::thread socket1_thread([&]() {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        while (true) {
+            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "Socket1_Stream");
+        }
+    });
+
+    std::thread socket2_thread([&]() {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        while (true) {
+            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "Socket2_Stream");
+        }
+    });
+
+    std::thread combined_thread([&]() {
+        process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
+    });
+
+    socket1_thread.join();
+    socket2_thread.join();
+    combined_thread.join();
+
+    // Cleanup
+    sws_freeContext(sws_ctx);
+    avcodec_free_context(&codec_ctx1);
+    avcodec_free_context(&codec_ctx2);
+    avcodec_free_context(&codec_ctx_combined);
+    close(sockfd1);
+    close(sockfd2);
+}
 
 int main() {
-    // 두 개의 비디오 수신기를 각각의 포트에서 실행, 서로 다른 OpenCV 창 이름 사용
-    VideoReceiver receiver1(SERVER_PORT, "LGUp.h264", "LGU+");
-    VideoReceiver receiver2(SERVER_PORT + 1, "KT.h264", "KT");
-
-    receiver1.start();
-    receiver2.start();
-
-    // 프로그램 종료 대기
-    cout << "Press Enter to stop..." << endl;
-    cin.get();
-
+    run_server();
     return 0;
 }
