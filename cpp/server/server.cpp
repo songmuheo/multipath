@@ -5,17 +5,19 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
-#include <cstring>
+#include <shared_mutex>
 #include <atomic>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <opencv2/opencv.hpp>
 #include <sys/select.h>
-#include <unistd.h> // close 함수를 위해 추가된 헤더 파일
-#include <vector>   // vector 사용을 위한 헤더 파일
-#include <string>   // string 사용을 위한 헤더 파일
-#include <algorithm> // max 사용을 위한 헤더 파일
-
+#include <sys/epoll.h>
+#include <unistd.h>
+#include <vector>
+#include <string>
+#include <algorithm>
+#include <future>
+#include <condition_variable>
+#include <opencv2/opencv.hpp>
 #include "config.h"
 
 extern "C" {
@@ -35,194 +37,117 @@ struct PacketHeader {
 // Global variables for state management
 std::unordered_map<uint32_t, uint64_t> packet_arrival_time;
 std::unordered_set<uint32_t> processed_sequences;
-std::mutex packet_mutex;
+std::shared_mutex packet_mutex;  // Use shared_mutex for read-write separation
+
+std::atomic<bool> stop_server(false);  // Global stop flag
 
 // Function to log packet information
-void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label) {
-    std::ofstream log_file(video_label + "_packet_log.txt", std::ios_base::app);
-    log_file << "Source IP: " << source_ip << ", Sequence Number: " << sequence_number
-             << ", Latency: " << latency << " ms" << std::endl;
+void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label, const std::string& log_filename) {
+    std::ofstream log_file(log_filename, std::ios_base::app);
+    log_file << source_ip << "," << sequence_number << "," << latency << "," << video_label << "\n";
 }
 
-// Function to decode and display video
-void decode_and_display(AVCodecContext* codec_ctx, SwsContext*& sws_ctx, std::vector<uint8_t>& buffer, const PacketHeader& header, const std::string& window_name) {
-    AVPacket* pkt = av_packet_alloc();
-    av_new_packet(pkt, buffer.size() - sizeof(PacketHeader));
-    memcpy(pkt->data, buffer.data() + sizeof(PacketHeader), buffer.size() - sizeof(PacketHeader));
-
-    if (avcodec_send_packet(codec_ctx, pkt) == 0) {
-        AVFrame* frame = av_frame_alloc();
-        if (avcodec_receive_frame(codec_ctx, frame) == 0) {
-            // Check if sws_ctx is already initialized
-            if (!sws_ctx) {
-                sws_ctx = sws_getContext(frame->width, frame->height, (AVPixelFormat)frame->format,
-                                         frame->width, frame->height, AV_PIX_FMT_BGR24,
-                                         SWS_BILINEAR, nullptr, nullptr, nullptr);
-                if (!sws_ctx) {
-                    std::cerr << "Could not initialize the conversion context" << std::endl;
-                    av_frame_free(&frame);
-                    av_packet_free(&pkt);
-                    return;
-                }
-            }
-
-            cv::Mat mat(frame->height, frame->width, CV_8UC3);
-            AVFrame* bgr_frame = av_frame_alloc();
-            int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_BGR24, frame->width, frame->height, 1);
-            std::vector<uint8_t> bgr_buffer(num_bytes);
-            av_image_fill_arrays(bgr_frame->data, bgr_frame->linesize, bgr_buffer.data(), AV_PIX_FMT_BGR24, frame->width, frame->height, 1);
-
-            sws_scale(sws_ctx, frame->data, frame->linesize, 0, frame->height, bgr_frame->data, bgr_frame->linesize);
-            memcpy(mat.data, bgr_frame->data[0], num_bytes);
-
-            cv::imshow(window_name, mat);
-            cv::waitKey(1);
-
-            // Save frame to file
-            // cv::imwrite(window_name + "_frame_" + std::to_string(header.sequence_number) + ".jpg", mat);
-
-            av_frame_free(&bgr_frame);
-        }
-        av_frame_free(&frame);
+// Function to save the video packets directly to a file asynchronously
+void save_video_packet(const std::vector<uint8_t>& buffer, std::ofstream& output_file) {
+    if (output_file.is_open()) {
+        output_file.write(reinterpret_cast<const char*>(buffer.data() + sizeof(PacketHeader)), buffer.size() - sizeof(PacketHeader));
     }
-    av_packet_free(&pkt);
 }
 
 // Function to process packets from each socket
-void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_len, AVCodecContext* codec_ctx, SwsContext*& sws_ctx, const std::string& window_name) {
+void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_len, std::ofstream& video_file, const std::string& log_filename, const std::string& video_label) {
     std::vector<uint8_t> buffer(BUFFER_SIZE);
-    int len = recvfrom(sockfd, buffer.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
-    if (len > 0) {
-        PacketHeader header;
-        memcpy(&header, buffer.data(), sizeof(PacketHeader));
+    while (!stop_server) {
+        int len = recvfrom(sockfd, buffer.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+        if (len > 0) {
+            uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            PacketHeader header;
+            memcpy(&header, buffer.data(), sizeof(PacketHeader));
 
-        std::string source_ip = inet_ntoa(client_addr.sin_addr);
-        uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        double latency = (receive_time - header.timestamp) / 1000.0;  // Convert to milliseconds
+            std::string source_ip = inet_ntoa(client_addr.sin_addr);
+            double latency = (receive_time - header.timestamp) / 1000.0;
 
-        // Log packet information for the specific socket
-        log_packet_info(source_ip, header.sequence_number, latency, window_name);
+            log_packet_info(source_ip, header.sequence_number, latency, video_label, log_filename);
 
-        // Decode and display the video
-        decode_and_display(codec_ctx, sws_ctx, buffer, header, window_name);
+            save_video_packet(buffer, video_file);
+        }
     }
 }
 
 // Function to process packets using select() for non-blocking I/O
-void process_combined_packets(int sockfd1, int sockfd2, AVCodecContext* codec_ctx, SwsContext*& sws_ctx) {
-    fd_set read_fds;
+void process_combined_packets(int sockfd1, int sockfd2, std::ofstream& video_file, const std::string& log_filename) {
+    const int MAX_EVENTS = 2;
+    struct epoll_event ev, events[MAX_EVENTS];
+    int epoll_fd = epoll_create1(0);
+    if (epoll_fd == -1) {
+        std::cerr << "Failed to create epoll file descriptor" << std::endl;
+        return;
+    }
+
+    ev.events = EPOLLIN;
+    ev.data.fd = sockfd1;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sockfd1, &ev) == -1) {
+        std::cerr << "Failed to add sockfd1 to epoll" << std::endl;
+        close(epoll_fd);
+        return;
+    }
+
+    ev.data.fd = sockfd2;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sockfd2, &ev) == -1) {
+        std::cerr << "Failed to add sockfd2 to epoll" << std::endl;
+        close(epoll_fd);
+        return;
+    }
+
+    std::vector<uint8_t> buffer(BUFFER_SIZE);
     struct sockaddr_in client_addr;
     socklen_t addr_len = sizeof(client_addr);
 
-    std::vector<uint8_t> buffer1(BUFFER_SIZE), buffer2(BUFFER_SIZE);
+    while (!stop_server) {
+        int nfds = epoll_wait(epoll_fd, events, MAX_EVENTS, -1);
+        if (nfds == -1) {
+            std::cerr << "epoll_wait failed" << std::endl;
+            break;
+        }
 
-    while (true) {
-        // Initialize the set of active sockets
-        FD_ZERO(&read_fds);
-        FD_SET(sockfd1, &read_fds);
-        FD_SET(sockfd2, &read_fds);
+        for (int n = 0; n < nfds; ++n) {
+            int sockfd = events[n].data.fd;
+            int len = recvfrom(sockfd, buffer.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
+            if (len > 0) {
+                PacketHeader header;
+                memcpy(&header, buffer.data(), sizeof(PacketHeader));
 
-        int max_sd = std::max(sockfd1, sockfd2);
+                std::string source_ip = inet_ntoa(client_addr.sin_addr);
+                uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                double latency = (receive_time - header.timestamp) / 1000.0;
 
-        // Select system call to monitor multiple file descriptors
-        int activity = select(max_sd + 1, &read_fds, nullptr, nullptr, nullptr);
+                // Check for duplicate packets
+                std::shared_lock<std::shared_mutex> read_lock(packet_mutex);
+                if (processed_sequences.count(header.sequence_number) == 0) {
+                    read_lock.unlock();
+                    std::unique_lock<std::shared_mutex> write_lock(packet_mutex);
+                    processed_sequences.insert(header.sequence_number);
+                    packet_arrival_time[header.sequence_number] = receive_time;
 
-        if (activity > 0) {
-            if (FD_ISSET(sockfd1, &read_fds)) {
-                int len1 = recvfrom(sockfd1, buffer1.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
-                if (len1 > 0) {
-                    PacketHeader header;
-                    memcpy(&header, buffer1.data(), sizeof(PacketHeader));
-
-                    std::string source_ip = inet_ntoa(client_addr.sin_addr);
-                    uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    double latency = (receive_time - header.timestamp) / 1000.0;
-
-                    bool is_first_arrival = false;
-
-                    {
-                        std::lock_guard<std::mutex> lock(packet_mutex);
-                        if (processed_sequences.count(header.sequence_number) == 0) {
-                            processed_sequences.insert(header.sequence_number);
-                            packet_arrival_time[header.sequence_number] = receive_time;
-                            is_first_arrival = true;
-                        } else if (receive_time < packet_arrival_time[header.sequence_number]) {
-                            packet_arrival_time[header.sequence_number] = receive_time;
-                            is_first_arrival = true;
-                        }
-                    }
-
-                    if (is_first_arrival) {
-                        log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream");
-                        decode_and_display(codec_ctx, sws_ctx, buffer1, header, "Combined_Stream");
-                    }
-                }
-            }
-
-            if (FD_ISSET(sockfd2, &read_fds)) {
-                int len2 = recvfrom(sockfd2, buffer2.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
-                if (len2 > 0) {
-                    PacketHeader header;
-                    memcpy(&header, buffer2.data(), sizeof(PacketHeader));
-
-                    std::string source_ip = inet_ntoa(client_addr.sin_addr);
-                    uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    double latency = (receive_time - header.timestamp) / 1000.0;
-
-                    bool is_first_arrival = false;
-
-                    {
-                        std::lock_guard<std::mutex> lock(packet_mutex);
-                        if (processed_sequences.count(header.sequence_number) == 0) {
-                            processed_sequences.insert(header.sequence_number);
-                            packet_arrival_time[header.sequence_number] = receive_time;
-                            is_first_arrival = true;
-                        } else if (receive_time < packet_arrival_time[header.sequence_number]) {
-                            packet_arrival_time[header.sequence_number] = receive_time;
-                            is_first_arrival = true;
-                        }
-                    }
-
-                    if (is_first_arrival) {
-                        log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream");
-                        decode_and_display(codec_ctx, sws_ctx, buffer2, header, "Combined_Stream");
-                    }
+                    // Log and save only if not already processed
+                    log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream", log_filename);
+                    save_video_packet(buffer, video_file);
                 }
             }
         }
-
-        // Add a small sleep to prevent busy waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    close(epoll_fd);
 }
 
 void run_server() {
     // Initialize FFmpeg and other settings
-    SwsContext* sws_ctx = nullptr; // Only declared once here
-
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
     if (!codec) {
         std::cerr << "Codec not found" << std::endl;
         return;
     }
 
-    AVCodecContext* codec_ctx1 = avcodec_alloc_context3(codec);
-    AVCodecContext* codec_ctx2 = avcodec_alloc_context3(codec);
-    AVCodecContext* codec_ctx_combined = avcodec_alloc_context3(codec);
-
-    if (!codec_ctx1 || !codec_ctx2 || !codec_ctx_combined) {
-        std::cerr << "Could not allocate video codec context" << std::endl;
-        return;
-    }
-
-    if (avcodec_open2(codec_ctx1, codec, nullptr) < 0 ||
-        avcodec_open2(codec_ctx2, codec, nullptr) < 0 ||
-        avcodec_open2(codec_ctx_combined, codec, nullptr) < 0) {
-        std::cerr << "Could not open codec" << std::endl;
-        return;
-    }
-
-    // Setup sockets
     int sockfd1 = socket(AF_INET, SOCK_DGRAM, 0);
     int sockfd2 = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd1 < 0 || sockfd2 < 0) {
@@ -242,48 +167,56 @@ void run_server() {
 
     if (bind(sockfd1, (struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
         std::cerr << "Bind failed on port " << SERVER_PORT1 << std::endl;
+        close(sockfd1);
+        close(sockfd2);
         return;
     }
     if (bind(sockfd2, (struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
         std::cerr << "Bind failed on port " << SERVER_PORT2 << std::endl;
+        close(sockfd1);
+        close(sockfd2);
         return;
     }
 
-    // Prepare for display using OpenCV
-    cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
+    std::string video_filename1 = "LGU_plus_video.h264";
+    std::string video_filename2 = "KT_video.h264";
+    std::string combined_video_filename = "Combined_Stream_video.h264";
+    std::string log_filename1 = "LGU_plus_packet_log.csv";
+    std::string log_filename2 = "KT_packet_log.csv";
+    std::string combined_log_filename = "Combined_Stream_packet_log.csv";
 
-    // Start threads for handling each socket
+    std::ofstream video_file1(video_filename1, std::ios_base::binary);
+    std::ofstream video_file2(video_filename2, std::ios_base::binary);
+    std::ofstream combined_video_file(combined_video_filename, std::ios_base::binary);
+
     std::thread socket1_thread([&]() {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
-        while (true) {
-            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
-        }
+        process_packet(sockfd1, client_addr, addr_len, video_file1, log_filename1, "LGU+_Stream");
     });
 
     std::thread socket2_thread([&]() {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
-        while (true) {
-            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
-        }
+        process_packet(sockfd2, client_addr, addr_len, video_file2, log_filename2, "KT_Stream");
     });
 
     std::thread combined_thread([&]() {
-        process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
+        process_combined_packets(sockfd1, sockfd2, combined_video_file, combined_log_filename);
     });
+
+    // Wait for user input to stop the server (or implement your own stop mechanism)
+    std::cin.get();
+    stop_server = true;
 
     socket1_thread.join();
     socket2_thread.join();
     combined_thread.join();
 
-    // Cleanup
-    sws_freeContext(sws_ctx);
-    avcodec_free_context(&codec_ctx1);
-    avcodec_free_context(&codec_ctx2);
-    avcodec_free_context(&codec_ctx_combined);
+    video_file1.close();
+    video_file2.close();
+    combined_video_file.close();
+
     close(sockfd1);
     close(sockfd2);
 }

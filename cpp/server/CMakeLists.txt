@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.5)
 project(server)
 
-set(CMAKE_CXX_STANDARD 11)
+# set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # OpenCV 라이브러리 설정
 find_package(OpenCV REQUIRED)
@@ -17,6 +19,7 @@ pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
 
 # 실행 파일 설정
 add_executable(server server.cpp)
+add_executable(play server_play.cpp)
 
 # 라이브러리 포함 디렉토리 설정
 include_directories(
@@ -37,5 +40,12 @@ target_link_libraries(server
     avformat
     avutil
     swscale
+    ${CMAKE_THREAD_LIBS_INIT}
+)
+
+# FFmpeg 및 기타 필요한 라이브러리를 링크 (play)
+target_link_libraries(play
+    ${OpenCV_LIBS}
+    ${FFMPEG_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )

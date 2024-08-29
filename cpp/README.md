@@ -43,10 +43,18 @@ Server -
 
 #### Version3
 
-목표: 
-Streaming protocol을 이용한 구현, 두 인터페이스로부터 수신한 패킷을 latency를 고려하여 하나의 최적화된 영상으로 만들기.
+App단에서 직접 코딩해서 Latency, Loss 측정 및 하나의 영상 만들기
 
-*수정: Streaming protocol이 아닌, App단에서 직접 코딩해서 Latency, Loss 측정 및 하나의 영상 만들기
+Client - 
+
+보낼 때, 작은 헤더를 만들어 보냄. 해당 헤더에는, Timestamp 및 Sequence number 포함
+
+Server -
+
+받아서, Timestamp를 보고 Latency를 계산. 또한, Sequence number를 보고 중복 패킷 제거
+
+server_play.cpp는, 영상 실시간 재생
+server.cpp는 영상 저장
 
 ### Client
 ```
