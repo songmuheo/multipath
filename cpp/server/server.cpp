@@ -189,11 +189,11 @@ void run_server() {
     std::ofstream video_file2(video_filename2, std::ios_base::binary);
     std::ofstream combined_video_file(combined_video_filename, std::ios_base::binary);
 
-    std::thread socket1_thread([&]() {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        process_packet(sockfd1, client_addr, addr_len, video_file1, log_filename1, "LGU+_Stream");
-    });
+    // std::thread socket1_thread([&]() {
+    //     struct sockaddr_in client_addr;
+    //     socklen_t addr_len = sizeof(client_addr);
+    //     process_packet(sockfd1, client_addr, addr_len, video_file1, log_filename1, "LGU+_Stream");
+    // });
 
     std::thread socket2_thread([&]() {
         struct sockaddr_in client_addr;
@@ -209,7 +209,7 @@ void run_server() {
     std::cin.get();
     stop_server = true;
 
-    socket1_thread.join();
+    // socket1_thread.join();
     socket2_thread.join();
     // combined_thread.join();
 
