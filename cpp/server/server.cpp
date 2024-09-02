@@ -69,7 +69,7 @@ void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_
 
             log_packet_info(source_ip, header.sequence_number, latency, video_label, log_filename);
 
-            save_video_packet(buffer, video_file);
+            // save_video_packet(buffer, video_file);
         }
     }
 }
@@ -201,9 +201,9 @@ void run_server() {
         process_packet(sockfd2, client_addr, addr_len, video_file2, log_filename2, "KT_Stream");
     });
 
-    std::thread combined_thread([&]() {
-        process_combined_packets(sockfd1, sockfd2, combined_video_file, combined_log_filename);
-    });
+    // std::thread combined_thread([&]() {
+    //     process_combined_packets(sockfd1, sockfd2, combined_video_file, combined_log_filename);
+    // });
 
     // Wait for user input to stop the server (or implement your own stop mechanism)
     std::cin.get();
@@ -211,11 +211,11 @@ void run_server() {
 
     socket1_thread.join();
     socket2_thread.join();
-    combined_thread.join();
+    // combined_thread.join();
 
-    video_file1.close();
-    video_file2.close();
-    combined_video_file.close();
+    // video_file1.close();
+    // video_file2.close();
+    // combined_video_file.close();
 
     close(sockfd1);
     close(sockfd2);
