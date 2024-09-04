@@ -82,9 +82,35 @@ public:
         close(sockfd2);
         sws_freeContext(sws_ctx);
     }
+    // Original
+    // void stream(rs2::video_frame& color_frame) {
+    //     frame->pts = frame_counter++;
 
+    //     uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
+
+    //     // YUYV 데이터를 YUV420P 형식으로 변환하여 AVFrame에 복사
+    //     const uint8_t* src_slices[1] = { yuyv_data };
+    //     int src_stride[1] = { 2 * WIDTH };
+    //     sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
+
+    //     encode_and_send_frame();
+    // }
+
+    // Modify
     void stream(rs2::video_frame& color_frame) {
-        frame->pts = frame_counter++;
+    // 현재 시간을 마이크로초 단위로 가져와 pts에 사용
+        uint64_t current_time_us = chrono::duration_cast<chrono::microseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
+        
+        // 50ms 지연을 적용하지 않음 (50ms 이전 프레임을 기준으로 설정)
+        // 타임베이스에 맞춘 pts 계산
+        AVRational time_base = codec_ctx->time_base; // 예: {1, 30} 또는 {1, 1000}
+        
+        // 30FPS 기준으로 pts 설정, 50ms 이전 프레임
+        // 타임베이스가 {1, 30}이라면, 1초당 30프레임 -> 1프레임당 약 33.3ms
+        int64_t pts_offset = (current_time_us - 50000) * time_base.den / (time_base.num * 1000000); // 50ms 지연 반영
+
+        frame->pts = pts_offset;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
 
@@ -95,6 +121,7 @@ public:
 
         encode_and_send_frame();
     }
+
 
 private:
     struct sockaddr_in create_sockaddr(const char* ip, int port) {

@@ -42,9 +42,10 @@ std::shared_mutex packet_mutex;  // Use shared_mutex for read-write separation
 std::atomic<bool> stop_server(false);  // Global stop flag
 
 // Function to log packet information
-void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label, const std::string& log_filename) {
-    std::ofstream log_file(log_filename, std::ios_base::app);
-    log_file << source_ip << "," << sequence_number << "," << latency << "," << video_label << "\n";
+void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label, uint64_t receive_time, size_t packet_size, std::ofstream& log_file) {
+    if (log_file.is_open()) {
+        log_file << source_ip << "," << sequence_number << "," << latency << "," << video_label << "," << receive_time << "," << packet_size << "\n";
+    }
 }
 
 // Function to save the video packets directly to a file asynchronously
@@ -55,7 +56,7 @@ void save_video_packet(const std::vector<uint8_t>& buffer, std::ofstream& output
 }
 
 // Function to process packets from each socket
-void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_len, std::ofstream& video_file, const std::string& log_filename, const std::string& video_label) {
+void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_len, std::ofstream& video_file, const std::string& video_label, std::ofstream& log_file) {
     std::vector<uint8_t> buffer(BUFFER_SIZE);
     while (!stop_server) {
         int len = recvfrom(sockfd, buffer.data(), BUFFER_SIZE, 0, (struct sockaddr*)&client_addr, &addr_len);
@@ -67,15 +68,16 @@ void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_
             std::string source_ip = inet_ntoa(client_addr.sin_addr);
             double latency = (receive_time - header.timestamp) / 1000.0;
 
-            log_packet_info(source_ip, header.sequence_number, latency, video_label, log_filename);
+            // Log packet information with additional fields
+            log_packet_info(source_ip, header.sequence_number, latency, video_label, receive_time, len, log_file);
 
-            // save_video_packet(buffer, video_file);
+            save_video_packet(buffer, video_file);
         }
     }
 }
 
 // Function to process packets using select() for non-blocking I/O
-void process_combined_packets(int sockfd1, int sockfd2, std::ofstream& video_file, const std::string& log_filename) {
+void process_combined_packets(int sockfd1, int sockfd2, std::ofstream& video_file, const std::string& video_label, std::ofstream& log_file) {
     const int MAX_EVENTS = 2;
     struct epoll_event ev, events[MAX_EVENTS];
     int epoll_fd = epoll_create1(0);
@@ -130,7 +132,7 @@ void process_combined_packets(int sockfd1, int sockfd2, std::ofstream& video_fil
                     packet_arrival_time[header.sequence_number] = receive_time;
 
                     // Log and save only if not already processed
-                    log_packet_info(source_ip, header.sequence_number, latency, "Combined_Stream", log_filename);
+                    log_packet_info(source_ip, header.sequence_number, latency, video_label, receive_time, len, log_file);
                     save_video_packet(buffer, video_file);
                 }
             }
@@ -181,6 +183,7 @@ void run_server() {
     std::string video_filename1 = "LGU_plus_video.h264";
     std::string video_filename2 = "KT_video.h264";
     std::string combined_video_filename = "Combined_Stream_video.h264";
+
     std::string log_filename1 = "LGU_plus_packet_log.csv";
     std::string log_filename2 = "KT_packet_log.csv";
     std::string combined_log_filename = "Combined_Stream_packet_log.csv";
@@ -189,33 +192,45 @@ void run_server() {
     std::ofstream video_file2(video_filename2, std::ios_base::binary);
     std::ofstream combined_video_file(combined_video_filename, std::ios_base::binary);
 
-    // std::thread socket1_thread([&]() {
-    //     struct sockaddr_in client_addr;
-    //     socklen_t addr_len = sizeof(client_addr);
-    //     process_packet(sockfd1, client_addr, addr_len, video_file1, log_filename1, "LGU+_Stream");
-    // });
+    std::ofstream log_file1(log_filename1, std::ios_base::out);
+    std::ofstream log_file2(log_filename2, std::ios_base::out);
+    std::ofstream combined_log_file(combined_log_filename, std::ios_base::out);
 
+    if (log_file1.is_open()) {
+    log_file1 << "Source IP,Sequence Number,Latency(ms),Video Label,Receive Time(us),Packet Size(bytes)\n";
+    }
+    if (log_file2.is_open()) {
+        log_file2 << "Source IP,Sequence Number,Latency(ms),Video Label,Receive Time(us),Packet Size(bytes)\n";
+    }
+    if (combined_log_file.is_open()) {
+        combined_log_file << "Source IP,Sequence Number,Latency(ms),Video Label,Receive Time(us),Packet Size(bytes)\n";
+    }
+
+    // Thread to process packets from sockfd1
+    std::thread socket1_thread([&]() {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        process_packet(sockfd1, client_addr, addr_len, video_file1, "LGU+_Stream", log_file1);
+    });
+
+    // Thread to process packets from sockfd2
     std::thread socket2_thread([&]() {
         struct sockaddr_in client_addr;
         socklen_t addr_len = sizeof(client_addr);
-        process_packet(sockfd2, client_addr, addr_len, video_file2, log_filename2, "KT_Stream");
+        process_packet(sockfd2, client_addr, addr_len, video_file2, "KT_Stream", log_file2);
     });
 
-    // std::thread combined_thread([&]() {
-    //     process_combined_packets(sockfd1, sockfd2, combined_video_file, combined_log_filename);
-    // });
+    // Thread to process combined packets using both sockfd1 and sockfd2
+    std::thread combined_thread([&]() {
+        process_combined_packets(sockfd1, sockfd2, combined_video_file, "Combined_Stream", combined_log_file);
+    });
 
-    // Wait for user input to stop the server (or implement your own stop mechanism)
-    std::cin.get();
+    std::cin.get();  // Wait for user input to stop the server
     stop_server = true;
 
-    // socket1_thread.join();
+    socket1_thread.join();
     socket2_thread.join();
     // combined_thread.join();
-
-    // video_file1.close();
-    // video_file2.close();
-    // combined_video_file.close();
 
     close(sockfd1);
     close(sockfd2);
