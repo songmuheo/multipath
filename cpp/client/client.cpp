@@ -121,7 +121,7 @@ private:
         tm local_time = *localtime(&time_now);
         
         char folder_name[100];
-        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H", &local_time);
+        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);  // 연, 월, 일, 시, 분까지 포함
 
         // frames 폴더 내에 새 폴더 생성
         string new_folder = FILEPATH + string(folder_name);
@@ -130,6 +130,7 @@ private:
         // 저장 경로 설정
         filepath = new_folder + "/";
     }
+
 
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
         struct sockaddr_in addr = {};
