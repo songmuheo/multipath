@@ -12,7 +12,7 @@ const int FPS = 30;
 const int BITRATE = 1500000;
 
 // File path to save png files
-const string FILEPATH = "/home/widen/Multipath/cpp/client/frames/"
+string FILEPATH = "/home/widen/Multipath/cpp/client/frames/"
 
 // const char* INTERFACE1_IP = "10.16.132.115";
 // const char* INTERFACE1_NAME = "wlp1s0";
