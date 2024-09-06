@@ -13,6 +13,7 @@
 #include <future>
 #include <cerrno>
 #include <cstring>
+#include <fstream>
 #include "config.h"
 
 extern "C" {
