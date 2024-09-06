@@ -1,3 +1,4 @@
+#include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
 #include <iostream>
 #include <chrono>
@@ -42,12 +43,12 @@ public:
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = { 1, FPS };
         codec_ctx->framerate = { FPS, 1 };
-        codec_ctx->gop_size = 10; // Group of Pictures -> 10 frames 마다 key frame 생성
+        codec_ctx->gop_size = 10;
         codec_ctx->max_b_frames = 1;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
 
-        codec_ctx->thread_count = 4;  // 멀티스레드 활성화
-        av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);  // 인코딩 속도 최적화
+        codec_ctx->thread_count = 4;
+        av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);
 
         if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
             throw runtime_error("Could not open codec");
@@ -75,6 +76,7 @@ public:
 
         sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
+   
     }
 
     ~VideoStreamer() {
@@ -82,46 +84,26 @@ public:
         close(sockfd2);
         sws_freeContext(sws_ctx);
     }
-    // Original
-    // void stream(rs2::video_frame& color_frame) {
-    //     frame->pts = frame_counter++;
 
-    //     uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
-
-    //     // YUYV 데이터를 YUV420P 형식으로 변환하여 AVFrame에 복사
-    //     const uint8_t* src_slices[1] = { yuyv_data };
-    //     int src_stride[1] = { 2 * WIDTH };
-    //     sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
-
-    //     encode_and_send_frame();
-    // }
-
-    // Modify
     void stream(rs2::video_frame& color_frame) {
-    // 현재 시간을 마이크로초 단위로 가져와 pts에 사용
-        uint64_t current_time_us = chrono::duration_cast<chrono::microseconds>(
-            chrono::system_clock::now().time_since_epoch()).count();
-        
-        // 50ms 지연을 적용하지 않음 (50ms 이전 프레임을 기준으로 설정)
-        // 타임베이스에 맞춘 pts 계산
-        AVRational time_base = codec_ctx->time_base; // 예: {1, 30} 또는 {1, 1000}
-        
-        // 30FPS 기준으로 pts 설정, 50ms 이전 프레임
-        // 타임베이스가 {1, 30}이라면, 1초당 30프레임 -> 1프레임당 약 33.3ms
-        int64_t pts_offset = (current_time_us - 50000) * time_base.den / (time_base.num * 1000000); // 50ms 지연 반영
-
-        frame->pts = pts_offset;
+        frame->pts = frame_counter++;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
 
-        // YUYV 데이터를 YUV420P 형식으로 변환하여 AVFrame에 복사
         const uint8_t* src_slices[1] = { yuyv_data };
         int src_stride[1] = { 2 * WIDTH };
         sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
 
-        encode_and_send_frame();
-    }
+        // 타임스탬프 생성
+        uint64_t timestamp = chrono::duration_cast<chrono::microseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
 
+        // 프레임 저장
+        save_frame(color_frame, timestamp);
+
+        // 프레임 인코딩 및 전송
+        encode_and_send_frame(timestamp);
+    }
 
 private:
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
@@ -151,7 +133,22 @@ private:
         return sockfd;
     }
 
-    void encode_and_send_frame() {
+    void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
+        // 파일 이름 생성 (타임스탬프 기반)
+        string filename = filepath + "frame_" + to_string(timestamp) + ".yuyv";
+
+        // YUYV 데이터를 파일로 저장
+        ofstream outfile(filename, ios::out | ios::binary);
+        if (outfile.is_open()) {
+            outfile.write(reinterpret_cast<const char*>(frame_data.get_data()), WIDTH * HEIGHT * 2); // YUYV는 2바이트 픽셀
+            outfile.close();
+        } else {
+            cerr << "Error opening file for saving raw frame" << endl;
+        }
+    }
+
+
+    void encode_and_send_frame(uint64_t timestamp) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
             return;
@@ -161,8 +158,7 @@ private:
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             // 사용자 정의 패킷 헤더 생성
             PacketHeader header;
-            header.timestamp = chrono::duration_cast<chrono::microseconds>(
-                chrono::system_clock::now().time_since_epoch()).count();
+            header.timestamp = timestamp; // 동일한 타임스탬프 사용
             header.sequence_number = sequence_number++;
 
             // 헤더와 실제 H.264 데이터 결합
@@ -171,24 +167,19 @@ private:
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
             // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
-
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
-                    //  cout << "\nSending packet on interface 2" ;
                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
                 }
             });
             
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
-                    // cout << "\nSending packet on interface 1" ;
                     cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
                 }
             });
 
-
-
-            // 전송이 완료될 때까지 대기
+            // 전송 완료 대기
             send_task1.get();
             send_task2.get();
 
@@ -211,6 +202,8 @@ private:
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
     atomic<int> sequence_number;
+
+    string filepath = "/home/widen/Multipath/cpp/client/frames/";
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {

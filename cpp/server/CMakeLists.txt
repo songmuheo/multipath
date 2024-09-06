@@ -20,6 +20,7 @@ pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
 # 실행 파일 설정
 add_executable(server server.cpp)
 add_executable(play server_play.cpp)
+# add_executable(play2 server_play2.cpp)
 
 # 라이브러리 포함 디렉토리 설정
 include_directories(
@@ -49,3 +50,10 @@ target_link_libraries(play
     ${FFMPEG_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )
+
+# FFmpeg 및 기타 필요한 라이브러리를 링크 (play2)
+# target_link_libraries(play2
+#     ${OpenCV_LIBS}
+#     ${FFMPEG_LIBRARIES}
+#     ${CMAKE_THREAD_LIBS_INIT}
+# )

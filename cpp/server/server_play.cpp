@@ -272,7 +272,7 @@ void run_server() {
     // Prepare for display using OpenCV
     cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
     cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
-    // cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
 
     // Start threads for handling each socket
     std::thread socket1_thread([&]() {
@@ -291,13 +291,13 @@ void run_server() {
         }
     });
 
-    // std::thread combined_thread([&]() {
-    //     process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
-    // });
+    std::thread combined_thread([&]() {
+        process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
+    });
 
     socket1_thread.join();
     socket2_thread.join();
-    // combined_thread.join();
+    combined_thread.join();
 
     // Cleanup
     sws_freeContext(sws_ctx);
