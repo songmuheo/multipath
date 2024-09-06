@@ -14,11 +14,15 @@
 #include <cerrno>
 #include <cstring>
 #include <fstream>
-#include <filesystem>  // C++17부터 사용 가능
-#include <iomanip>     // for std::put_time
 #include "config.h"
 
-namespace fs = std::filesystem;
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libavutil/opt.h>
+}
+
 using namespace std;
 
 struct PacketHeader {
@@ -28,10 +32,7 @@ struct PacketHeader {
 
 class VideoStreamer {
 public:
-    VideoStreamer(const string& base_directory) : frame_counter(0), sequence_number(0) {
-        // 폴더 생성
-        filepath = create_folder(base_directory);
-
+    VideoStreamer() : frame_counter(0), sequence_number(0) {
         codec = avcodec_find_encoder(AV_CODEC_ID_H264);
         if (!codec) throw runtime_error("Codec not found");
 
@@ -76,6 +77,7 @@ public:
 
         sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
+   
     }
 
     ~VideoStreamer() {
@@ -105,24 +107,6 @@ public:
     }
 
 private:
-    // 폴더 생성 함수
-    string create_folder(const string& base_directory) {
-        auto now = chrono::system_clock::now();
-        time_t t_now = chrono::system_clock::to_time_t(now);
-
-        // 폴더 이름 생성 (현재 시간 기반)
-        stringstream folder_name;
-        folder_name << std::put_time(localtime(&t_now), "%Y-%m-%d_%H");
-
-        string full_path = base_directory + "/" + folder_name.str();
-
-        // 폴더 생성
-        fs::create_directories(full_path);
-        cout << "Directory created: " << full_path << endl;
-
-        return full_path + "/";
-    }
-
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
         struct sockaddr_in addr = {};
         addr.sin_family = AF_INET;
@@ -150,6 +134,20 @@ private:
         return sockfd;
     }
 
+    // void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
+    //     // 파일 이름 생성 (타임스탬프 기반)
+    //     string filename = filepath + "frame_" + to_string(timestamp) + ".yuyv";
+
+    //     // YUYV 데이터를 파일로 저장
+    //     ofstream outfile(filename, ios::out | ios::binary);
+    //     if (outfile.is_open()) {
+    //         outfile.write(reinterpret_cast<const char*>(frame_data.get_data()), WIDTH * HEIGHT * 2); // YUYV는 2바이트 픽셀
+    //         outfile.close();
+    //     } else {
+    //         cerr << "Error opening file for saving raw frame" << endl;
+    //     }
+    // }
+
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
         // 파일 이름 생성 (타임스탬프 기반)
         string filename = filepath + "frame_" + to_string(timestamp) + ".png";
@@ -163,6 +161,7 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
+
     void encode_and_send_frame(uint64_t timestamp) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
@@ -173,7 +172,7 @@ private:
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             // 사용자 정의 패킷 헤더 생성
             PacketHeader header;
-            header.timestamp = timestamp;
+            header.timestamp = timestamp; // 동일한 타임스탬프 사용
             header.sequence_number = sequence_number++;
 
             // 헤더와 실제 H.264 데이터 결합
@@ -218,7 +217,7 @@ private:
     atomic<int> frame_counter;
     atomic<int> sequence_number;
 
-    string filepath;
+    string filepath = "/home/widen/Multipath/cpp/client/frames/";
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
@@ -241,11 +240,7 @@ int main() {
         cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
         pipe.start(cfg);
 
-        // Base directory for frames
-        string base_directory = "/home/widen/Multipath/cpp/client/frames";
-
-        // VideoStreamer 객체를 생성하여 파일 경로 초기화
-        VideoStreamer streamer(base_directory);
+        VideoStreamer streamer;
 
         atomic<bool> running(true);
         thread capture_thread(frame_capture_thread, ref(streamer), ref(pipe), ref(running));
