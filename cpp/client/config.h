@@ -11,6 +11,9 @@ const float PACKET_INTERVAL = 0.033;
 const int FPS = 30;
 const int BITRATE = 1500000;
 
+// File path to save png files
+const string FILEPATH = "/home/widen/Multipath/cpp/client/frames/"
+
 // const char* INTERFACE1_IP = "10.16.132.115";
 // const char* INTERFACE1_NAME = "wlp1s0";
 // const char* INTERFACE2_IP = "192.168.0.24";

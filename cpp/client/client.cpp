@@ -14,6 +14,9 @@
 #include <cerrno>
 #include <cstring>
 #include <fstream>
+#include <filesystem> // 파일 시스템 라이브러리 추가
+#include <ctime>
+
 #include "config.h"
 
 extern "C" {
@@ -24,6 +27,7 @@ extern "C" {
 }
 
 using namespace std;
+namespace fs = std::filesystem;
 
 struct PacketHeader {
     uint64_t timestamp; // 8 bytes
@@ -33,6 +37,9 @@ struct PacketHeader {
 class VideoStreamer {
 public:
     VideoStreamer() : frame_counter(0), sequence_number(0) {
+        // 폴더 생성 및 경로 설정
+        create_and_set_output_folder();
+
         codec = avcodec_find_encoder(AV_CODEC_ID_H264);
         if (!codec) throw runtime_error("Codec not found");
 
@@ -107,6 +114,23 @@ public:
     }
 
 private:
+    void create_and_set_output_folder() {
+        // 현재 시간 기반으로 폴더 이름 생성
+        auto now = chrono::system_clock::now();
+        time_t time_now = chrono::system_clock::to_time_t(now);
+        tm local_time = *localtime(&time_now);
+        
+        char folder_name[100];
+        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H", &local_time);
+
+        // frames 폴더 내에 새 폴더 생성
+        string new_folder = FILEPATH + string(folder_name);
+        fs::create_directories(new_folder);
+
+        // 저장 경로 설정
+        filepath = new_folder + "/";
+    }
+
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
         struct sockaddr_in addr = {};
         addr.sin_family = AF_INET;
@@ -134,20 +158,6 @@ private:
         return sockfd;
     }
 
-    // void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
-    //     // 파일 이름 생성 (타임스탬프 기반)
-    //     string filename = filepath + "frame_" + to_string(timestamp) + ".yuyv";
-
-    //     // YUYV 데이터를 파일로 저장
-    //     ofstream outfile(filename, ios::out | ios::binary);
-    //     if (outfile.is_open()) {
-    //         outfile.write(reinterpret_cast<const char*>(frame_data.get_data()), WIDTH * HEIGHT * 2); // YUYV는 2바이트 픽셀
-    //         outfile.close();
-    //     } else {
-    //         cerr << "Error opening file for saving raw frame" << endl;
-    //     }
-    // }
-
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
         // 파일 이름 생성 (타임스탬프 기반)
         string filename = filepath + "frame_" + to_string(timestamp) + ".png";
@@ -161,7 +171,6 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
-
     void encode_and_send_frame(uint64_t timestamp) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
@@ -170,17 +179,14 @@ private:
 
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-            // 사용자 정의 패킷 헤더 생성
             PacketHeader header;
-            header.timestamp = timestamp; // 동일한 타임스탬프 사용
+            header.timestamp = timestamp;
             header.sequence_number = sequence_number++;
 
-            // 헤더와 실제 H.264 데이터 결합
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            // 두 개의 소켓을 비동기적으로 사용하여 패킷을 전송
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
@@ -193,7 +199,6 @@ private:
                 }
             });
 
-            // 전송 완료 대기
             send_task1.get();
             send_task2.get();
 
@@ -217,7 +222,7 @@ private:
     atomic<int> frame_counter;
     atomic<int> sequence_number;
 
-    string filepath = "/home/widen/Multipath/cpp/client/frames/";
+    string filepath; // 프레임 저장 경로
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
