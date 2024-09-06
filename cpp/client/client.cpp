@@ -134,18 +134,31 @@ private:
         return sockfd;
     }
 
+    // void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
+    //     // 파일 이름 생성 (타임스탬프 기반)
+    //     string filename = filepath + "frame_" + to_string(timestamp) + ".yuyv";
+
+    //     // YUYV 데이터를 파일로 저장
+    //     ofstream outfile(filename, ios::out | ios::binary);
+    //     if (outfile.is_open()) {
+    //         outfile.write(reinterpret_cast<const char*>(frame_data.get_data()), WIDTH * HEIGHT * 2); // YUYV는 2바이트 픽셀
+    //         outfile.close();
+    //     } else {
+    //         cerr << "Error opening file for saving raw frame" << endl;
+    //     }
+    // }
+
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
         // 파일 이름 생성 (타임스탬프 기반)
-        string filename = filepath + "frame_" + to_string(timestamp) + ".yuyv";
+        string filename = filepath + "frame_" + to_string(timestamp) + ".png";
 
-        // YUYV 데이터를 파일로 저장
-        ofstream outfile(filename, ios::out | ios::binary);
-        if (outfile.is_open()) {
-            outfile.write(reinterpret_cast<const char*>(frame_data.get_data()), WIDTH * HEIGHT * 2); // YUYV는 2바이트 픽셀
-            outfile.close();
-        } else {
-            cerr << "Error opening file for saving raw frame" << endl;
-        }
+        // OpenCV를 사용하여 프레임 저장 (YUYV -> BGR 변환)
+        cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
+        cv::Mat bgr_image;
+        cv::cvtColor(yuyv_image, bgr_image, cv::COLOR_YUV2BGR_YUYV);
+
+        // 이미지 파일로 저장
+        cv::imwrite(filename, bgr_image);
     }
 
 
