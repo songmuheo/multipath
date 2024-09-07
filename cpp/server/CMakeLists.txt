@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 project(server)
 
-# set(CMAKE_CXX_STANDARD 11)
+# C++ 표준 설정
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
@@ -13,47 +13,44 @@ find_package(Threads REQUIRED)
 
 # FFmpeg 라이브러리 설정
 find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale libavdevice libavfilter)
 
-# FFmpeg 라이브러리 경로 및 설정을 가져옴
-pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
+# CUDA 설정
+find_package(CUDA REQUIRED)
+
+# CUDA 라이브러리 경로 수동 설정
+# set(CUDA_LIBRARY_DIRS "/usr/local/cuda/lib64")
+
+message(STATUS "CUDA Version: ${CUDA_VERSION}")
+message(STATUS "CUDA Library Path: ${CUDA_LIBRARY_DIRS}")
+message(STATUS "CUDA Include Path: ${CUDA_INCLUDE_DIRS}")
+
+include_directories(${CUDA_INCLUDE_DIRS})
+link_directories(${CUDA_LIBRARY_DIRS})
+
 
 # 실행 파일 설정
 add_executable(server server.cpp)
 add_executable(play server_play.cpp)
-# add_executable(play2 server_play2.cpp)
 
 # 라이브러리 포함 디렉토리 설정
 include_directories(
     ${OpenCV_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
+    ${CUDA_INCLUDE_DIRS}
 )
 
-# 라이브러리 링크 디렉토리 설정
-link_directories(
-    ${FFMPEG_LIBRARY_DIRS}
-)
-
-# FFmpeg 및 기타 필요한 라이브러리를 링크
+# FFmpeg 라이브러리 링크는 ${FFMPEG_LIBRARIES}를 통해 처리
 target_link_libraries(server
     ${OpenCV_LIBS}
-    ${FFMPEG_LIBRARIES}
-    avcodec
-    avformat
-    avutil
-    swscale
+    ${FFMPEG_LIBRARIES}  # FFmpeg 관련 라이브러리 일괄 링크
+    ${CUDA_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
 )
 
 # FFmpeg 및 기타 필요한 라이브러리를 링크 (play)
 target_link_libraries(play
     ${OpenCV_LIBS}
-    ${FFMPEG_LIBRARIES}
+    ${FFMPEG_LIBRARIES}  # FFmpeg 관련 라이브러리 일괄 링크
     ${CMAKE_THREAD_LIBS_INIT}
 )
-
-# FFmpeg 및 기타 필요한 라이브러리를 링크 (play2)
-# target_link_libraries(play2
-#     ${OpenCV_LIBS}
-#     ${FFMPEG_LIBRARIES}
-#     ${CMAKE_THREAD_LIBS_INIT}
-# )
