@@ -161,7 +161,7 @@ private:
 
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
         // 파일 이름 생성 (타임스탬프 기반)
-        string filename = filepath + "frame_" + to_string(timestamp) + ".png";
+        string filename = FILEPATH + "frame_" + to_string(timestamp) + ".png";
 
         // OpenCV를 사용하여 프레임 저장 (YUYV -> BGR 변환)
         cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
@@ -222,8 +222,6 @@ private:
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
     atomic<int> sequence_number;
-
-    string filepath; // 프레임 저장 경로
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
