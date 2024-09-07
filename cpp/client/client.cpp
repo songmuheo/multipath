@@ -222,6 +222,8 @@ private:
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
     atomic<int> sequence_number;
+
+    string filepath; // 프레임 저장 경로
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
