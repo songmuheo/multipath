@@ -16,17 +16,17 @@ const int BITRATE = 1500000;
 // File path to save png files
 const std::string FILEPATH = "/home/widen/Multipath/cpp/client/frames/";
 
-// const char* INTERFACE1_IP = "10.16.132.115";
-// const char* INTERFACE1_NAME = "wlp1s0";
-// const char* INTERFACE2_IP = "192.168.0.24";
-// const char* INTERFACE2_NAME = "wlx588694fd23d6";
+const char* INTERFACE1_IP = "10.16.130.87";
+const char* INTERFACE1_NAME = "wlp1s0";
+const char* INTERFACE2_IP = "192.168.0.24";
+const char* INTERFACE2_NAME = "wlx588694fd23d6";
 
 // // LGU+
-const char* INTERFACE1_IP = "192.168.10.100";
-const char* INTERFACE1_NAME = "enx588694f65060";
+// const char* INTERFACE1_IP = "192.168.10.100";
+// const char* INTERFACE1_NAME = "enx588694f65060";
 // // KT
-const char* INTERFACE2_IP = "192.168.1.17";
-const char* INTERFACE2_NAME = "enx588694f747d7";
+// const char* INTERFACE2_IP = "192.168.1.17";
+// const char* INTERFACE2_NAME = "enx588694f747d7";
 
 const int HEIGHT = 480;
 const int WIDTH = 640;
