@@ -40,7 +40,7 @@ public:
         // 폴더 생성 및 경로 설정
         create_and_set_output_folder();
 
-        codec = avcodec_find_encoder(AV_CODEC_ID_H264);
+        codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
         if (!codec) throw runtime_error("Codec not found");
 
         codec_ctx.reset(avcodec_alloc_context3(codec));

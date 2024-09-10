@@ -270,33 +270,33 @@ void run_server() {
     }
 
     // Prepare for display using OpenCV
-    cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
+    // cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
+    // cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
     cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
 
     // Start threads for handling each socket
-    std::thread socket1_thread([&]() {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        while (true) {
-            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
-        }
-    });
+    // std::thread socket1_thread([&]() {
+    //     struct sockaddr_in client_addr;
+    //     socklen_t addr_len = sizeof(client_addr);
+    //     while (true) {
+    //         process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
+    //     }
+    // });
 
-    std::thread socket2_thread([&]() {
-        struct sockaddr_in client_addr;
-        socklen_t addr_len = sizeof(client_addr);
-        while (true) {
-            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
-        }
-    });
+    // std::thread socket2_thread([&]() {
+    //     struct sockaddr_in client_addr;
+    //     socklen_t addr_len = sizeof(client_addr);
+    //     while (true) {
+    //         process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
+    //     }
+    // });
 
     std::thread combined_thread([&]() {
         process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
     });
 
-    socket1_thread.join();
-    socket2_thread.join();
+    // socket1_thread.join();
+    // socket2_thread.join();
     combined_thread.join();
 
     // Cleanup

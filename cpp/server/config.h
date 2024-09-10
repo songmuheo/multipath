@@ -13,8 +13,6 @@ const int BUFFER_SIZE = 65536;
 const char* FILEPATH_FRAME = "/home/songmu/Multipath/cpp/server/frames";
 const char* FILEPATH_LOG = "/home/songmu/Multipath/cpp/server/logs";
 
-const uint64_t TIMEOUT_THRESHOLD_MS = 70;
-const uint64_t CLEANUP_INTERVAL_MS = 500;
 const uint64_t PLAY_DELAY_MS = 50;
 
 
