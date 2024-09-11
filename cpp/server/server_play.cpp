@@ -39,26 +39,6 @@ std::unordered_map<uint32_t, uint64_t> packet_arrival_time;
 std::unordered_set<uint32_t> processed_sequences;
 std::mutex packet_mutex;
 
-// 글로벌 변수로 파일 버퍼 및 쓰기 상태 관리
-std::vector<std::string> write_buffer;
-std::mutex write_mutex;
-
-// Function to log packet information
-// void log_packet_info(const std::string& source_ip, uint32_t sequence_number, double latency, const std::string& video_label) {
-//     std::lock_guard<std::mutex> lock(write_mutex);
-//     write_buffer.push_back(source_ip + "," + std::to_string(sequence_number) + "," + std::to_string(latency) + "\n");
-
-//     // 버퍼가 일정 크기 이상일 때 파일에 기록
-//     if (write_buffer.size() >= WRITE_BUFFER_THRESHOLD) {
-//         std::ofstream log_file(video_label + "_packet_log.csv", std::ios_base::app);
-//         for (const auto& line : write_buffer) {
-//             log_file << line;
-//         }
-//         write_buffer.clear();
-//     }
-// }
-
-
 // Function to decode and display video
 void decode_and_display(AVCodecContext* codec_ctx, SwsContext*& sws_ctx, std::vector<uint8_t>& buffer, const PacketHeader& header, const std::string& window_name) {
     AVPacket* pkt = av_packet_alloc();
@@ -215,7 +195,7 @@ void run_server() {
     // Initialize FFmpeg and other settings
     SwsContext* sws_ctx = nullptr; // Only declared once here
 
-    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
     if (!codec) {
         std::cerr << "Codec not found" << std::endl;
         return;
@@ -270,33 +250,33 @@ void run_server() {
     }
 
     // Prepare for display using OpenCV
-    // cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
-    // cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("LGU+", cv::WINDOW_AUTOSIZE);
+    cv::namedWindow("KT", cv::WINDOW_AUTOSIZE);
     cv::namedWindow("Combined_Stream", cv::WINDOW_AUTOSIZE);
 
     // Start threads for handling each socket
-    // std::thread socket1_thread([&]() {
-    //     struct sockaddr_in client_addr;
-    //     socklen_t addr_len = sizeof(client_addr);
-    //     while (true) {
-    //         process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
-    //     }
-    // });
+    std::thread socket1_thread([&]() {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        while (true) {
+            process_packet(sockfd1, client_addr, addr_len, codec_ctx1, sws_ctx, "LGU+");
+        }
+    });
 
-    // std::thread socket2_thread([&]() {
-    //     struct sockaddr_in client_addr;
-    //     socklen_t addr_len = sizeof(client_addr);
-    //     while (true) {
-    //         process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
-    //     }
-    // });
+    std::thread socket2_thread([&]() {
+        struct sockaddr_in client_addr;
+        socklen_t addr_len = sizeof(client_addr);
+        while (true) {
+            process_packet(sockfd2, client_addr, addr_len, codec_ctx2, sws_ctx, "KT");
+        }
+    });
 
     std::thread combined_thread([&]() {
         process_combined_packets(sockfd1, sockfd2, codec_ctx_combined, sws_ctx);
     });
 
-    // socket1_thread.join();
-    // socket2_thread.join();
+    socket1_thread.join();
+    socket2_thread.join();
     combined_thread.join();
 
     // Cleanup
@@ -306,15 +286,6 @@ void run_server() {
     avcodec_free_context(&codec_ctx_combined);
     close(sockfd1);
     close(sockfd2);
-
-    // 프로그램 종료 시 남은 버퍼 내용을 파일에 기록
-    if (!write_buffer.empty()) {
-        std::ofstream log_file("Combined_Stream_packet_log.csv", std::ios_base::app);
-        for (const auto& line : write_buffer) {
-            log_file << line;
-        }
-        write_buffer.clear();
-    }
 }
 
 int main() {

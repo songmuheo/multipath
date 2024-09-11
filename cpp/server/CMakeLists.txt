@@ -32,6 +32,8 @@ link_directories(${CUDA_LIBRARY_DIRS})
 # 실행 파일 설정
 add_executable(server server.cpp)
 add_executable(play server_play.cpp)
+add_executable(receive receive.cpp)
+
 
 # 라이브러리 포함 디렉토리 설정
 include_directories(
@@ -53,4 +55,12 @@ target_link_libraries(play
     ${OpenCV_LIBS}
     ${FFMPEG_LIBRARIES}  # FFmpeg 관련 라이브러리 일괄 링크
     ${CMAKE_THREAD_LIBS_INIT}
+)
+
+# receive에 대한 FFmpeg 및 pthread 라이브러리 링크 추가
+target_link_libraries(receive
+    ${OpenCV_LIBS}
+    ${FFMPEG_LIBRARIES}  # FFmpeg 관련 라이브러리 일괄 링크
+    ${CUDA_LIBRARIES}
+    Threads::Threads     # pthread 라이브러리 링크 추가
 )
