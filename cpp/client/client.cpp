@@ -172,45 +172,95 @@ private:
         // 이미지 파일로 저장
         cv::imwrite(filename, bgr_image);
     }
-
-    void encode_and_send_frame(uint64_t timestamp) {
-        if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
-            cerr << "Error sending a frame for encoding" << endl;
-            return;
-        }
-
-        int ret;
-        while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-            PacketHeader header;
-            header.timestamp = timestamp;
-            header.sequence_number = sequence_number++;
-
-            vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
-            memcpy(packet_data.data(), &header, sizeof(PacketHeader));
-            memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-
-            auto send_task2 = async(launch::async, [this, &packet_data] {
-                if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
-                    cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
-                }
-            });
-            
-            auto send_task1 = async(launch::async, [this, &packet_data] {
-                if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
-                    cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
-                }
-            });
-
-            send_task1.get();
-            send_task2.get();
-
-            av_packet_unref(pkt.get());
-        }
-
-        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-            cerr << "Error receiving encoded packet" << endl;
-        }
+void encode_and_send_frame(uint64_t timestamp) {
+    if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
+        cerr << "Error sending a frame for encoding" << endl;
+        return;
     }
+
+    // 프레임 로그 기록
+    cout << "Encoding frame: " << frame_counter - 1 << " | Timestamp: " << timestamp << endl;
+
+    int ret;
+    int packet_count = 0; // 패킷 카운터
+    while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+        PacketHeader header;
+        header.timestamp = timestamp;
+        header.sequence_number = sequence_number++;
+
+        // 패킷 로그 기록
+        cout << "Sending packet: " << sequence_number - 1 << " | Size: " << pkt->size << " bytes | Frame PTS: " << frame->pts << endl;
+
+        vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
+        memcpy(packet_data.data(), &header, sizeof(PacketHeader));
+        memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
+
+        // 패킷을 네트워크로 전송
+        auto send_task2 = async(launch::async, [this, &packet_data] {
+            if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+                cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
+            }
+        });
+        
+        auto send_task1 = async(launch::async, [this, &packet_data] {
+            if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+                cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
+            }
+        });
+
+        send_task1.get();
+        send_task2.get();
+
+        av_packet_unref(pkt.get());
+        packet_count++;  // 패킷 수 증가
+    }
+
+    // 패킷 전송이 완료된 후 해당 프레임에 대한 로그 출력
+    cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
+
+    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+        cerr << "Error receiving encoded packet" << endl;
+    }
+}
+
+//     void encode_and_send_frame(uint64_t timestamp) {
+//         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
+//             cerr << "Error sending a frame for encoding" << endl;
+//             return;
+//         }
+
+//         int ret;
+//         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+//             PacketHeader header;
+//             header.timestamp = timestamp;
+//             header.sequence_number = sequence_number++;
+
+//             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
+//             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
+//             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
+
+//             auto send_task2 = async(launch::async, [this, &packet_data] {
+//                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+//                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
+//                 }
+//             });
+            
+//             auto send_task1 = async(launch::async, [this, &packet_data] {
+//                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+//                     cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
+//                 }
+//             });
+
+//             send_task1.get();
+//             send_task2.get();
+
+//             av_packet_unref(pkt.get());
+//         }
+
+//         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+//             cerr << "Error receiving encoded packet" << endl;
+//         }
+//     }
 
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
