@@ -243,7 +243,7 @@ private:
             packet_count++;
         }
 
-        cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
+        // cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
         log_frame_packet_count_to_csv(frame_counter - 1, packet_count);
 
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
