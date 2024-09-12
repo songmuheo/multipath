@@ -112,6 +112,7 @@ public:
         // 프레임 인코딩 및 전송
         encode_and_send_frame(timestamp);
     }
+    atomic<int> sequence_number;
 
 private:
     void create_and_set_output_folder() {
@@ -221,7 +222,6 @@ private:
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
-    atomic<int> sequence_number;
 
     string filepath; // 프레임 저장 경로
 };
