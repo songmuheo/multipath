@@ -188,8 +188,27 @@ void encode_and_send_frame(uint64_t timestamp) {
         header.timestamp = timestamp;
         header.sequence_number = sequence_number++;
 
+        // NALU 타입 추출
+        uint8_t nalu_type = (pkt->data[0] >> 1) & 0x3F;  // 상위 6비트를 사용하여 NALU 타입 확인
+
+        // NALU 타입에 따른 프레임 유형 확인
+        string frame_type;
+        if (nalu_type == 19) {
+            frame_type = "I-frame (Key Frame)";
+        } else if (nalu_type == 1 || nalu_type == 2) {
+            frame_type = "P-frame";
+        } else if (nalu_type == 0) {
+            frame_type = "B-frame";
+        } else {
+            frame_type = "Unknown frame type";
+        }
+
         // 패킷 로그 기록
-        cout << "Sending packet: " << sequence_number - 1 << " | Size: " << pkt->size << " bytes | Frame PTS: " << frame->pts << endl;
+        cout << "Sending packet: " << sequence_number - 1 
+             << " | Size: " << pkt->size << " bytes"
+             << " | NALU type: " << (int)nalu_type 
+             << " | Frame type: " << frame_type 
+             << " | Frame PTS: " << frame->pts << endl;
 
         vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
         memcpy(packet_data.data(), &header, sizeof(PacketHeader));
@@ -222,6 +241,7 @@ void encode_and_send_frame(uint64_t timestamp) {
         cerr << "Error receiving encoded packet" << endl;
     }
 }
+
 
 //     void encode_and_send_frame(uint64_t timestamp) {
 //         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
