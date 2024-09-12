@@ -244,7 +244,7 @@ private:
         }
 
         // cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
-        log_frame_packet_count_to_csv(frame_counter - 1, packet_count);
+        // log_frame_packet_count_to_csv(frame_counter - 1, packet_count);
 
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             cerr << "Error receiving encoded packet" << endl;
