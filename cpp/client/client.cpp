@@ -263,11 +263,10 @@ private:
     void log_packet_to_csv(int sequence_number, int size, int nalu_type, const string& frame_type, uint64_t timestamp, int64_t pts, uint64_t delay) {
         log_file << sequence_number << "," 
                  << size << "," 
-                 << nalu_type << "," 
                  << frame_type << "," 
                  << timestamp << "," 
                  << pts << "," 
-                 << delay << "\n";
+                 << delay / 1000 << "ms\n";
     }
 
     void log_frame_packet_count_to_csv(int frame_number, int packet_count) {
