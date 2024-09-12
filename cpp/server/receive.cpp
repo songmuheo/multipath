@@ -42,13 +42,14 @@ std::string create_timestamped_directory(const std::string& base_dir) {
 
     std::string full_path = base_dir + "/" + folder_name.str();
     std::filesystem::create_directories(full_path + "/logs");
-    std::filesystem::create_directories(full_path + "/bins");
+    std::filesystem::create_directories(full_path + "/bins/lg");
+    std::filesystem::create_directories(full_path + "/bins/kt");
 
     return full_path;
 }
 
 // 소켓 설정 및 데이터 수신
-void receive_packets(int port, const char* log_filepath, const char* frame_filepath) {
+void receive_packets(int port, const char* log_filepath, const char* frame_filepath, const std::string& port_folder) {
     int sockfd;
     char buffer[BUFFER_SIZE];
     struct sockaddr_in server_addr, client_addr;
@@ -102,11 +103,8 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
         log_packet_info(log_filepath, client_ip, header->sequence_number, latency_us, len);
 
         // 패킷 데이터 파일로 저장
-        std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + std::to_string(received_time_us) + ".bin";
+        std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + port_folder + "/" + std::to_string(received_time_us) + ".bin";
         save_packet_data(frame_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
-
-        // std::cout << "Packet received from: " << client_ip << ", Seq: " << header->sequence_number 
-        //           << ", Latency: " << (latency_us / 1000.0) << " ms, Size: " << len << " bytes\n";
     }
 
     close(sockfd);
@@ -121,8 +119,8 @@ int main() {
     std::string port2_log = folder_path + "/logs/kt_log.csv";
 
     // 포트 1과 포트 2에서 패킷 수신을 처리하는 쓰레드 생성 (멀티스레드로 처리할 경우)
-    std::thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str(), folder_path.c_str());
-    std::thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str(), folder_path.c_str());
+    std::thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str(), folder_path.c_str(), "lg");
+    std::thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str(), folder_path.c_str(), "kt");
 
     // 쓰레드가 종료될 때까지 대기
     port1_thread.join();

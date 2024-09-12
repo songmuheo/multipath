@@ -183,6 +183,7 @@ private:
             PacketHeader header;
             header.timestamp = timestamp;
             header.sequence_number = sequence_number++;
+            std::cout << "Sequence_number : " << header.sequence_number ;
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
