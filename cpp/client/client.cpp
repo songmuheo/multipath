@@ -1,22 +1,19 @@
+#include <iostream>
+#include <fstream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <future>
+#include <chrono>
 #include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
-#include <iostream>
-#include <chrono>
-#include <thread>
-#include <atomic>
-#include <cstring>
 #include <arpa/inet.h>
 #include <sys/types.h>
 #include <ifaddrs.h>
 #include <unistd.h>
-#include <memory>
-#include <future>
+#include <filesystem>
 #include <cerrno>
 #include <cstring>
-#include <fstream>
-#include <filesystem> // 파일 시스템 라이브러리 추가
-#include <ctime>
-
 #include "config.h"
 
 extern "C" {
@@ -30,15 +27,18 @@ using namespace std;
 namespace fs = std::filesystem;
 
 struct PacketHeader {
-    uint64_t timestamp; // 8 bytes
-    uint32_t sequence_number; // 4 bytes
+    uint64_t timestamp;
+    uint32_t sequence_number;
 };
 
 class VideoStreamer {
 public:
-    VideoStreamer() : frame_counter(0), sequence_number(0) {
-        // 폴더 생성 및 경로 설정
-        create_and_set_output_folder();
+    VideoStreamer() : frame_counter(0), sequence_number(0), total_i_frames(0), total_p_frames(0), total_b_frames(0) {
+        // Create the output folders for frames and logs
+        create_and_set_output_folders();
+
+        // Open the CSV log file
+        open_log_file();
 
         codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
         if (!codec) throw runtime_error("Codec not found");
@@ -84,13 +84,13 @@ public:
 
         sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
-   
     }
 
     ~VideoStreamer() {
         close(sockfd1);
         close(sockfd2);
         sws_freeContext(sws_ctx);
+        log_file.close();
     }
 
     void stream(rs2::video_frame& color_frame) {
@@ -112,26 +112,31 @@ public:
         // 프레임 인코딩 및 전송
         encode_and_send_frame(timestamp);
     }
+
     atomic<int> sequence_number;
+    atomic<int> total_i_frames;
+    atomic<int> total_p_frames;
+    atomic<int> total_b_frames;
 
 private:
-    void create_and_set_output_folder() {
-        // 현재 시간 기반으로 폴더 이름 생성
+    void create_and_set_output_folders() {
         auto now = chrono::system_clock::now();
         time_t time_now = chrono::system_clock::to_time_t(now);
         tm local_time = *localtime(&time_now);
-        
+
         char folder_name[100];
-        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);  // 연, 월, 일, 시, 분까지 포함
+        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
 
-        // frames 폴더 내에 새 폴더 생성
-        string new_folder = FILEPATH + string(folder_name);
-        fs::create_directories(new_folder);
+        // Root directory based on current time
+        string base_folder = FILEPATH + string(folder_name);
+        fs::create_directories(base_folder);
 
-        // 저장 경로 설정
-        filepath = new_folder + "/";
+        // Create frames and logs subdirectories
+        frames_folder = base_folder + "/frames";
+        logs_folder = base_folder + "/logs";
+        fs::create_directories(frames_folder);
+        fs::create_directories(logs_folder);
     }
-
 
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
         struct sockaddr_in addr = {};
@@ -161,126 +166,113 @@ private:
     }
 
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
-        // 파일 이름 생성 (타임스탬프 기반)
-        string filename = filepath + "frame_" + to_string(timestamp) + ".png";
+        // Save frames to the "frames" folder
+        string filename = frames_folder + "/frame_" + to_string(timestamp) + ".png";
 
-        // OpenCV를 사용하여 프레임 저장 (YUYV -> BGR 변환)
         cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
         cv::Mat bgr_image;
         cv::cvtColor(yuyv_image, bgr_image, cv::COLOR_YUV2BGR_YUYV);
 
-        // 이미지 파일로 저장
         cv::imwrite(filename, bgr_image);
     }
-void encode_and_send_frame(uint64_t timestamp) {
-    if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
-        cerr << "Error sending a frame for encoding" << endl;
-        return;
-    }
 
-    // 프레임 로그 기록
-    cout << "Encoding frame: " << frame_counter - 1 << " | Timestamp: " << timestamp << endl;
-
-    int ret;
-    int packet_count = 0; // 패킷 카운터
-    while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-        PacketHeader header;
-        header.timestamp = timestamp;
-        header.sequence_number = sequence_number++;
-
-        // NALU 타입 추출
-        uint8_t nalu_type = (pkt->data[0] >> 1) & 0x3F;  // 상위 6비트를 사용하여 NALU 타입 확인
-
-        // NALU 타입에 따른 프레임 유형 확인
-        string frame_type;
-        if (nalu_type == 19) {
-            frame_type = "I-frame (Key Frame)";
-        } else if (nalu_type == 1 || nalu_type == 2) {
-            frame_type = "P-frame";
-        } else if (nalu_type == 0) {
-            frame_type = "B-frame";
-        } else {
-            frame_type = "Unknown frame type";
+    void encode_and_send_frame(uint64_t timestamp) {
+        if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
+            cerr << "Error sending a frame for encoding" << endl;
+            return;
         }
 
-        // 패킷 로그 기록
-        cout << "Sending packet: " << sequence_number - 1 
-             << " | Size: " << pkt->size << " bytes"
-             << " | NALU type: " << (int)nalu_type 
-             << " | Frame type: " << frame_type 
-             << " | Frame PTS: " << frame->pts << endl;
+        // cout << "Encoding frame: " << frame_counter - 1 << " | Timestamp: " << timestamp << endl;
 
-        vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
-        memcpy(packet_data.data(), &header, sizeof(PacketHeader));
-        memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
+        int ret;
+        int packet_count = 0;
+        while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+            PacketHeader header;
+            header.timestamp = timestamp;
+            header.sequence_number = sequence_number++;
 
-        // 패킷을 네트워크로 전송
-        auto send_task2 = async(launch::async, [this, &packet_data] {
-            if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
-                cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
+            uint8_t nalu_type = (pkt->data[0] >> 1) & 0x3F;
+
+            string frame_type;
+            if (nalu_type == 19) {
+                frame_type = "I-frame (Key Frame)";
+                total_i_frames++;
+            } else if (nalu_type == 1 || nalu_type == 2) {
+                frame_type = "P-frame";
+                total_p_frames++;
+            } else if (nalu_type == 0) {
+                frame_type = "B-frame";
+                total_b_frames++;
+            } else {
+                frame_type = "Unknown frame type";
             }
-        });
-        
-        auto send_task1 = async(launch::async, [this, &packet_data] {
-            if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
-                cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
-            }
-        });
 
-        send_task1.get();
-        send_task2.get();
+            uint64_t send_time = chrono::duration_cast<chrono::microseconds>(
+                chrono::system_clock::now().time_since_epoch()).count();
+            uint64_t delay = send_time - timestamp;
 
-        av_packet_unref(pkt.get());
-        packet_count++;  // 패킷 수 증가
-    }
+            // cout << "Sending packet: " << sequence_number - 1 
+            //      << " | Size: " << pkt->size << " bytes"
+            //      << " | NALU type: " << (int)nalu_type 
+            //      << " | Frame type: " << frame_type 
+            //      << " | Frame PTS: " << frame->pts
+            //      << " | Delay: " << delay << " microseconds" << endl;
 
-    // 패킷 전송이 완료된 후 해당 프레임에 대한 로그 출력
-    cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
+            vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
+            memcpy(packet_data.data(), &header, sizeof(PacketHeader));
+            memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-        cerr << "Error receiving encoded packet" << endl;
-    }
-}
+            log_packet_to_csv(sequence_number - 1, pkt->size, nalu_type, frame_type, timestamp, frame->pts, delay);
 
-
-//     void encode_and_send_frame(uint64_t timestamp) {
-//         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
-//             cerr << "Error sending a frame for encoding" << endl;
-//             return;
-//         }
-
-//         int ret;
-//         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-//             PacketHeader header;
-//             header.timestamp = timestamp;
-//             header.sequence_number = sequence_number++;
-
-//             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
-//             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
-//             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-
-//             auto send_task2 = async(launch::async, [this, &packet_data] {
-//                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
-//                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
-//                 }
-//             });
+            auto send_task2 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+                    cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
+                }
+            });
             
-//             auto send_task1 = async(launch::async, [this, &packet_data] {
-//                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
-//                     cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
-//                 }
-//             });
+            auto send_task1 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+                    cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
+                }
+            });
 
-//             send_task1.get();
-//             send_task2.get();
+            send_task1.get();
+            send_task2.get();
 
-//             av_packet_unref(pkt.get());
-//         }
+            av_packet_unref(pkt.get());
+            packet_count++;
+        }
 
-//         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-//             cerr << "Error receiving encoded packet" << endl;
-//         }
-//     }
+        cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
+        log_frame_packet_count_to_csv(frame_counter - 1, packet_count);
+
+        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+            cerr << "Error receiving encoded packet" << endl;
+        }
+    }
+
+    void open_log_file() {
+        // Save logs to the "logs" folder
+        log_file.open(logs_folder + "/packet_log.csv");
+        if (!log_file.is_open()) {
+            throw runtime_error("Failed to open CSV log file");
+        }
+        log_file << "SequenceNumber,Size,NALUType,FrameType,Timestamp,PTS,Delay\n";
+    }
+
+    void log_packet_to_csv(int sequence_number, int size, int nalu_type, const string& frame_type, uint64_t timestamp, int64_t pts, uint64_t delay) {
+        log_file << sequence_number << "," 
+                 << size << "," 
+                 << nalu_type << "," 
+                 << frame_type << "," 
+                 << timestamp << "," 
+                 << pts << "," 
+                 << delay << "\n";
+    }
+
+    void log_frame_packet_count_to_csv(int frame_number, int packet_count) {
+        log_file << "Frame " << frame_number << " was sent with " << packet_count << " packets\n";
+    }
 
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
@@ -288,12 +280,14 @@ void encode_and_send_frame(uint64_t timestamp) {
     unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{nullptr, [](AVPacket* p) { av_packet_free(&p); }};
 
     SwsContext* sws_ctx = nullptr;
+    ofstream log_file;
 
     int sockfd1, sockfd2;
     struct sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
 
-    string filepath; // 프레임 저장 경로
+    string frames_folder;  // Path to store frames
+    string logs_folder;    // Path to store logs
 };
 
 void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
@@ -306,7 +300,11 @@ void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<b
             streamer.stream(color_frame);
         }
     }
-    std::cout << "\n\nFinal sequence number : " << streamer.sequence_number << "\n\n" ;
+
+    // cout << "\nFinal sequence number: " << streamer.sequence_number << "\n";
+    // cout << "Total I-frames: " << streamer.total_i_frames << "\n";
+    // cout << "Total P-frames: " << streamer.total_p_frames << "\n";
+    // cout << "Total B-frames: " << streamer.total_b_frames << "\n";
 }
 
 int main() {
