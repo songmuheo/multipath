@@ -33,7 +33,7 @@ struct PacketHeader {
 
 class VideoStreamer {
 public:
-    VideoStreamer() : frame_counter(0), sequence_number(0), total_i_frames(0), total_p_frames(0), total_b_frames(0) {
+    VideoStreamer() : frame_counter(0), sequence_number(0) {
         // Create the output folders for frames and logs
         create_and_set_output_folders();
 
@@ -114,9 +114,6 @@ public:
     }
 
     atomic<int> sequence_number;
-    atomic<int> total_i_frames;
-    atomic<int> total_p_frames;
-    atomic<int> total_b_frames;
 
 private:
     void create_and_set_output_folders() {
@@ -191,38 +188,15 @@ private:
             header.timestamp = timestamp;
             header.sequence_number = sequence_number++;
 
-            uint8_t nalu_type = (pkt->data[0] >> 1) & 0x3F;
-
-            string frame_type;
-            if (nalu_type == 19) {
-                frame_type = "I-frame (Key Frame)";
-                total_i_frames++;
-            } else if (nalu_type == 1 || nalu_type == 2) {
-                frame_type = "P-frame";
-                total_p_frames++;
-            } else if (nalu_type == 0) {
-                frame_type = "B-frame";
-                total_b_frames++;
-            } else {
-                frame_type = "Unknown frame type";
-            }
-
             uint64_t send_time = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
             uint64_t delay = send_time - timestamp;
-
-            // cout << "Sending packet: " << sequence_number - 1 
-            //      << " | Size: " << pkt->size << " bytes"
-            //      << " | NALU type: " << (int)nalu_type 
-            //      << " | Frame type: " << frame_type 
-            //      << " | Frame PTS: " << frame->pts
-            //      << " | Delay: " << delay << " microseconds" << endl;
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, nalu_type, frame_type, timestamp, frame->pts, delay);
+            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, frame->pts, delay);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
@@ -260,10 +234,9 @@ private:
         log_file << "SequenceNumber,Size,FrameType,Timestamp,PTS,Delay(ms)\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, int nalu_type, const string& frame_type, uint64_t timestamp, int64_t pts, uint64_t delay) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, int64_t pts, uint64_t delay) {
         log_file << sequence_number << "," 
                  << size << "," 
-                 << frame_type << "," 
                  << timestamp << "," 
                  << pts << "," 
                  << delay / 1000 << "ms\n";
@@ -299,11 +272,6 @@ void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<b
             streamer.stream(color_frame);
         }
     }
-
-    // cout << "\nFinal sequence number: " << streamer.sequence_number << "\n";
-    // cout << "Total I-frames: " << streamer.total_i_frames << "\n";
-    // cout << "Total P-frames: " << streamer.total_p_frames << "\n";
-    // cout << "Total B-frames: " << streamer.total_b_frames << "\n";
 }
 
 int main() {
