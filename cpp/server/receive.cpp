@@ -103,7 +103,8 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
         log_packet_info(log_filepath, client_ip, header->sequence_number, latency_us, len);
 
         // 패킷 데이터 파일로 저장
-        std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + port_folder + "/" + std::to_string(received_time_us) + ".bin";
+        std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + port_folder + "/" + 
+                std::to_string(header->timestamp) + "_" + std::to_string(received_time_us) + ".bin";
         save_packet_data(frame_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
     }
 
