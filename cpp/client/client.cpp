@@ -231,7 +231,7 @@ private:
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "SequenceNumber,Size,FrameType,Timestamp,PTS,Delay(ms)\n";
+        log_file << "SequenceNumber,Size, Timestamp,PTS,Delay(ms)\n";
     }
 
     void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, int64_t pts, uint64_t delay) {
