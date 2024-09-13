@@ -192,7 +192,7 @@ private:
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, send_time frame->pts, delay);
+            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, send_time, frame->pts, delay);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
