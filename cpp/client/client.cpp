@@ -93,7 +93,7 @@ public:
         log_file.close();
     }
 
-    void stream(rs2::video_frame& color_frame) {
+    void stream(rs2::video_frame& color_frame, uint64_t timestamp) {
         frame->pts = frame_counter++;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
@@ -101,10 +101,6 @@ public:
         const uint8_t* src_slices[1] = { yuyv_data };
         int src_stride[1] = { 2 * WIDTH };
         sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
-
-        // 타임스탬프 생성
-        uint64_t timestamp = chrono::duration_cast<chrono::microseconds>(
-            chrono::system_clock::now().time_since_epoch()).count();
 
         // 프레임 저장
         save_frame(color_frame, timestamp);
@@ -196,7 +192,7 @@ private:
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, frame->pts, delay);
+            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, send_time frame->pts, delay);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
@@ -231,13 +227,14 @@ private:
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "SequenceNumber,Size, Timestamp,PTS,Delay(ms)\n";
+        log_file << "SequenceNumber,Size,Timestamp,Sendtime,PTS,Delay(ms)\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, int64_t pts, uint64_t delay) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, uint64_t delay) {
         log_file << sequence_number << "," 
                  << size << "," 
                  << timestamp << "," 
+                 << sendtime << ","
                  << pts << "," 
                  << delay / 1000 << "ms\n";
     }
@@ -268,8 +265,11 @@ void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<b
         if (pipe.poll_for_frames(&frames)) {
             rs2::video_frame color_frame = frames.get_color_frame();
             if (!color_frame) continue;
+            // frame 생성시의 timestamp 생성
+            uint64_t timestamp = chrono::duration_cast<chrono::microseconds>(
+                chrono::system_clock::now().time_since_epoch()).count();
 
-            streamer.stream(color_frame);
+            streamer.stream(color_frame, timestamp);
         }
     }
 }

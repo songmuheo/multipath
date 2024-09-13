@@ -17,20 +17,6 @@ struct PacketHeader {
     uint32_t sequence_number;   // 4 bytes
 };
 
-// 패킷 데이터를 파일에 저장하는 함수
-void save_packet_data(const char* filepath, const char* data, size_t size) {
-    std::ofstream outfile(filepath, std::ios::binary | std::ios::app);
-    outfile.write(data, size);
-    outfile.close();
-}
-
-// 패킷 정보를 CSV 파일에 기록하는 함수
-void log_packet_info(const char* logpath, const std::string& source_ip, uint32_t sequence_number, uint64_t latency_us, size_t message_size) {
-    std::ofstream logfile(logpath, std::ios::app);
-    logfile << source_ip << "," << sequence_number << "," << (latency_us / 1000.0) << "," << message_size << "\n"; // latency를 ms로 변환하여 기록
-    logfile.close();
-}
-
 // 현재 날짜와 시간을 기반으로 폴더 경로 생성
 std::string create_timestamped_directory(const std::string& base_dir) {
     auto now = std::chrono::system_clock::now();
@@ -44,9 +30,34 @@ std::string create_timestamped_directory(const std::string& base_dir) {
     std::filesystem::create_directories(full_path + "/logs");
     std::filesystem::create_directories(full_path + "/bins/lg");
     std::filesystem::create_directories(full_path + "/bins/kt");
-
+    // std::ofstream outfile(full_path + "/logs/", std::ios::binary | std::ios::app);
     return full_path;
 }
+
+// 패킷 데이터를 파일에 저장하는 함수
+void save_packet_data(const char* filepath, const char* data, size_t size) {
+    std::ofstream outfile(filepath, std::ios::binary | std::ios::app);
+    outfile.write(data, size);
+    outfile.close();
+}
+
+void create_log_file(const char* logpath) {
+    std::ofstream logfile(logpath, std::ios::app);
+    logfile << "source ip,sequence number,timestamp,received time,latency(ms),message size\n";
+    logfile.close();
+
+}
+
+// 패킷 정보를 CSV 파일에 기록하는 함수
+void log_packet_info(const char* logpath, const std::string& source_ip, uint32_t sequence_number, uint64_t timestamp, uint64_t received_time_us,
+                                                             uint64_t latency_us, size_t message_size) 
+{
+    std::ofstream logfile(logpath, std::ios::app);
+    logfile << source_ip << "," << sequence_number << "," << timestamp << "," << 
+    received_time_us << "," << (latency_us / 1000.0) << "," << message_size << "\n"; // latency를 ms로 변환하여 기록
+    logfile.close();
+}
+
 
 // 소켓 설정 및 데이터 수신
 void receive_packets(int port, const char* log_filepath, const char* frame_filepath, const std::string& port_folder) {
@@ -78,6 +89,9 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
 
     std::cout << "Listening on port " << port << std::endl;
 
+    create_log_file(log_filepath);
+    std::ofstream logfile(log_filepath, std::ios::app);
+
     while (true) {
         ssize_t len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
         if (len < 0) {
@@ -100,7 +114,7 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
         uint64_t latency_us = received_time_us - header->timestamp;
 
         // 패킷 정보 로그 파일에 기록
-        log_packet_info(log_filepath, client_ip, header->sequence_number, latency_us, len);
+        log_packet_info(log_filepath, client_ip, header->sequence_number, header->timestamp, received_time_us, latency_us, len);
 
         // 패킷 데이터 파일로 저장
         std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + port_folder + "/" + std::to_string(header->sequence_number) + "_" +
@@ -108,6 +122,7 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
         save_packet_data(frame_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
     }
 
+    logfile.close();
     close(sockfd);
 }
 
