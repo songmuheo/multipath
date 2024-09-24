@@ -3,16 +3,22 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-const char* SERVER_IP = "203.229.155.232";
+#include <string>
 
-const int SERVER_PORT1 = 12345;
-const int SERVER_PORT2 = 12346;
+const char* SERVER_IP = "222.111.144.61";
+
+const int SERVER_PORT1 = 12345; //lg
+const int SERVER_PORT2 = 12346; //kt
 
 const int BUFFER_SIZE = 65536;
 
-const char* FILEPATH_FRAME = "/home/songmu/Multipath/cpp/server/results/frames";
-const char* FILEPATH_LOG = "/home/songmu/Multipath/cpp/server/results/logs";
-const char* FILEPATH_RAW = "/home/songmu/Multipath/cpp/server/results/raw";
+const std::string BASE_FILEPATH = "/home/songmu/";
+
+// Path to save bin files(received packet)
+const std::string FILEPATH_TO_SAVE_RAW_PACKET = BASE_FILEPATH + "Multipath/cpp/results/server";
+
+const std::string FILEPATH_FRAME = BASE_FILEPATH + "Multipath/cpp/results/server/frames";
+const std::string FILEPATH_LOG = BASE_FILEPATH + "Multipath/cpp/results/server/logs";
 
 const uint64_t PLAY_DELAY_MS = 50;
 

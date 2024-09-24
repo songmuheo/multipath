@@ -6,6 +6,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <chrono>
+#include <atomic>
 #include <iomanip>
 #include <ctime>
 #include <thread>
@@ -13,7 +14,8 @@
 #include "config.h"
 
 struct PacketHeader {
-    uint64_t timestamp;        // 8 bytes, microsecond 단위
+    uint64_t timestamp_frame;   // 8 bytes, microsecond 단위
+    uint64_t timestamp_sending; // 8 bytes, microsecond 단위
     uint32_t sequence_number;   // 4 bytes
 };
 
@@ -24,13 +26,12 @@ std::string create_timestamped_directory(const std::string& base_dir) {
     std::tm* local_time = std::localtime(&now_time);
 
     std::ostringstream folder_name;
-    folder_name << std::put_time(local_time, "%Y-%m-%d_%H-%M");
+    folder_name << std::put_time(local_time, "%Y_%m_%d_%H_%M");
 
     std::string full_path = base_dir + "/" + folder_name.str();
     std::filesystem::create_directories(full_path + "/logs");
     std::filesystem::create_directories(full_path + "/bins/lg");
     std::filesystem::create_directories(full_path + "/bins/kt");
-    // std::ofstream outfile(full_path + "/logs/", std::ios::binary | std::ios::app);
     return full_path;
 }
 
@@ -43,24 +44,24 @@ void save_packet_data(const char* filepath, const char* data, size_t size) {
 
 void create_log_file(const char* logpath) {
     std::ofstream logfile(logpath, std::ios::app);
-    logfile << "source ip,sequence number,timestamp,received time,latency(ms),message size\n";
+    logfile << "source ip,sequence number,timestamp_frame, timestamp_sending, received time, network_latency(ms),message size\n";
     logfile.close();
 
 }
 
 // 패킷 정보를 CSV 파일에 기록하는 함수
-void log_packet_info(const char* logpath, const std::string& source_ip, uint32_t sequence_number, uint64_t timestamp, uint64_t received_time_us,
-                                                             uint64_t latency_us, size_t message_size) 
+void log_packet_info(const char* logpath, const std::string& source_ip, uint32_t sequence_number, uint64_t timestamp_frame, uint64_t timestamp_sending, 
+                uint64_t received_time_us, uint64_t network_latency_us, size_t message_size) 
 {
     std::ofstream logfile(logpath, std::ios::app);
-    logfile << source_ip << "," << sequence_number << "," << timestamp << "," << 
-    received_time_us << "," << (latency_us / 1000.0) << "," << message_size << "\n"; // latency를 ms로 변환하여 기록
+    logfile << source_ip << "," << sequence_number << "," << timestamp_frame << "," << timestamp_sending << "," <<
+    received_time_us << "," << (network_latency_us / 1000.0) << "," << message_size << "\n"; // latency를 ms로 변환하여 기록
     logfile.close();
 }
 
 
 // 소켓 설정 및 데이터 수신
-void receive_packets(int port, const char* log_filepath, const char* frame_filepath, const std::string& port_folder) {
+void receive_packets(int port, const char* log_filepath, const char* bin_filepath) {
     int sockfd;
     char buffer[BUFFER_SIZE];
     struct sockaddr_in server_addr, client_addr;
@@ -111,15 +112,16 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
         PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
 
         // 패킷 도착 지연 시간 계산 (마이크로초 단위)
-        uint64_t latency_us = received_time_us - header->timestamp;
+        uint64_t network_latency_us = received_time_us - header->timestamp_sending;
 
         // 패킷 정보 로그 파일에 기록
-        log_packet_info(log_filepath, client_ip, header->sequence_number, header->timestamp, received_time_us, latency_us, len);
+        log_packet_info(log_filepath, client_ip, header->sequence_number, header->timestamp_frame, header->timestamp_sending, received_time_us, network_latency_us, len);
 
         // 패킷 데이터 파일로 저장
-        std::string frame_filepath_with_seq = std::string(frame_filepath) + "/bins/" + port_folder + "/" + std::to_string(header->sequence_number) + "_" +
-                std::to_string(header->timestamp) + "_" + std::to_string(received_time_us) + ".bin";
-        save_packet_data(frame_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
+        std::string bin_filepath_with_seq = std::string(bin_filepath) + std::to_string(header->sequence_number) + "_" +
+                std::to_string(header->timestamp_sending) + "_" + std::to_string(received_time_us) + "_" + std::to_string(header->timestamp_frame) + ".bin";
+        // save_packet_data(bin_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
+        save_packet_data(bin_filepath_with_seq.c_str(), buffer, len);
     }
 
     logfile.close();
@@ -128,15 +130,19 @@ void receive_packets(int port, const char* log_filepath, const char* frame_filep
 
 int main() {
     // 새로운 디렉터리 생성
-    std::string base_dir = FILEPATH_RAW;
+    std::string base_dir = FILEPATH_TO_SAVE_RAW_PACKET;
     std::string folder_path = create_timestamped_directory(base_dir);
 
     std::string port1_log = folder_path + "/logs/lg_log.csv";
     std::string port2_log = folder_path + "/logs/kt_log.csv";
 
+    std::string port1_bin = folder_path + "/bins/lg/";
+    std::string port2_bin = folder_path + "/bins/kt/" ;
+    // atomic<bool> running(true);
+
     // 포트 1과 포트 2에서 패킷 수신을 처리하는 쓰레드 생성 (멀티스레드로 처리할 경우)
-    std::thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str(), folder_path.c_str(), "lg");
-    std::thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str(), folder_path.c_str(), "kt");
+    std::thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str(), port1_bin.c_str());
+    std::thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str(), port2_bin.c_str());
 
     // 쓰레드가 종료될 때까지 대기
     port1_thread.join();
