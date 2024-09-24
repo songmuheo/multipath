@@ -27,7 +27,8 @@ using namespace std;
 namespace fs = std::filesystem;
 
 struct PacketHeader {
-    uint64_t timestamp;
+    uint64_t timestamp_frame;
+    uint64_t timestamp_sending;
     uint32_t sequence_number;
 };
 
@@ -93,7 +94,7 @@ public:
         log_file.close();
     }
 
-    void stream(rs2::video_frame& color_frame, uint64_t timestamp) {
+    void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
         frame->pts = frame_counter++;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
@@ -103,10 +104,10 @@ public:
         sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT, frame->data, frame->linesize);
 
         // 프레임 저장
-        save_frame(color_frame, timestamp);
+        save_frame(color_frame, timestamp_frame);
 
         // 프레임 인코딩 및 전송
-        encode_and_send_frame(timestamp);
+        encode_and_send_frame(timestamp_frame);
     }
 
     atomic<int> sequence_number;
@@ -121,7 +122,7 @@ private:
         strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
 
         // Root directory based on current time
-        string base_folder = FILEPATH + string(folder_name);
+        string base_folder = SAVE_FILEPATH + string(folder_name);
         fs::create_directories(base_folder);
 
         // Create frames and logs subdirectories
@@ -158,9 +159,9 @@ private:
         return sockfd;
     }
 
-    void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp) {
+    void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp_frame) {
         // Save frames to the "frames" folder
-        string filename = frames_folder + "/frame_" + to_string(timestamp) + ".png";
+        string filename = frames_folder + "/" + to_string(timestamp_frame) + ".png";
 
         cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
         cv::Mat bgr_image;
@@ -169,30 +170,28 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
-    void encode_and_send_frame(uint64_t timestamp) {
+    void encode_and_send_frame(uint64_t timestamp_frame) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
             return;
         }
 
-        // cout << "Encoding frame: " << frame_counter - 1 << " | Timestamp: " << timestamp << endl;
-
         int ret;
         int packet_count = 0;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             PacketHeader header;
-            header.timestamp = timestamp;
-            header.sequence_number = sequence_number++;
-
-            uint64_t send_time = chrono::duration_cast<chrono::microseconds>(
+            // Frame이 생성 됐을 때의 time -> 현재 Encoded data의 sequence_number와 같은 frame은 아니다(GoP 등의 설정에 따라 다름)
+            header.timestamp_frame = timestamp_frame;
+            // Encoded data가 생성됐을 때의 time (Sending하기 직전의 time)
+            header.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
-            uint64_t delay = send_time - timestamp;
+            header.sequence_number = sequence_number++;
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, timestamp, send_time, frame->pts, delay);
+            log_packet_to_csv(sequence_number - 1, pkt->size, header.timestamp_frame, header.timestamp_sending, frame->pts);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
@@ -213,9 +212,6 @@ private:
             packet_count++;
         }
 
-        // cout << "Frame " << frame_counter - 1 << " sent with " << packet_count << " packets" << endl;
-        // log_frame_packet_count_to_csv(frame_counter - 1, packet_count);
-
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             cerr << "Error receiving encoded packet" << endl;
         }
@@ -227,20 +223,16 @@ private:
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "SequenceNumber,Size,Timestamp,Sendtime,PTS,Delay(ms)\n";
+        log_file << "SequenceNumber,Size,Timestamp_frame,Timstamp_sending,PTS\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, uint64_t delay) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts) {
         log_file << sequence_number << "," 
                  << size << "," 
                  << timestamp << "," 
                  << sendtime << ","
                  << pts << "," 
-                 << delay / 1000 << "ms\n";
-    }
-
-    void log_frame_packet_count_to_csv(int frame_number, int packet_count) {
-        log_file << "Frame " << frame_number << " was sent with " << packet_count << " packets\n";
+                 << "\n";
     }
 
     const AVCodec* codec;
@@ -259,17 +251,17 @@ private:
     string logs_folder;    // Path to store logs
 };
 
-void frame_capture_thread(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
+void client(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
     while (running.load()) {
         rs2::frameset frames;
         if (pipe.poll_for_frames(&frames)) {
             rs2::video_frame color_frame = frames.get_color_frame();
             if (!color_frame) continue;
             // frame 생성시의 timestamp 생성
-            uint64_t timestamp = chrono::duration_cast<chrono::microseconds>(
+            uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
 
-            streamer.stream(color_frame, timestamp);
+            streamer.stream(color_frame, timestamp_frame);
         }
     }
 }
@@ -285,13 +277,13 @@ int main() {
         VideoStreamer streamer;
 
         atomic<bool> running(true);
-        thread capture_thread(frame_capture_thread, ref(streamer), ref(pipe), ref(running));
+        thread client_thread(client, ref(streamer), ref(pipe), ref(running));
 
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
         running.store(false);
-        capture_thread.join();
+        client_thread.join();
     }
     catch (const exception& e) {
         cerr << "Error: " << e.what() << endl;

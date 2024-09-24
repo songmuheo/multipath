@@ -11,7 +11,7 @@ Client에서 2개의 Interfaces를 통해 UDP 패킷을 전송. 이 때, H.264�
 
 Server에서는 각 Interface에서 받은 UDP 패킷에 대한 정보를 csv 파일로 로깅한다
 
-#### Version_1.2
+#### Version_1.2 -> Merge 예정
 
 KT, LGU+ 망을 사용하도록 Interface 값 변경
 

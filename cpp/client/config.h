@@ -13,8 +13,11 @@ const float PACKET_INTERVAL = 0.033;
 const int FPS = 30;
 const int BITRATE = 1500000;
 
+// const std::string BASE_FILEPATH = "/home/widen/"
+const std::string BASE_FILEPATH = "/home/songmu/";
+
 // File path to save png files
-const std::string FILEPATH = "/home/widen/Multipath/cpp/client/results/";
+const std::string SAVE_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/";
 
 const char* INTERFACE1_IP = "10.16.130.87";
 const char* INTERFACE1_NAME = "wlp1s0";
