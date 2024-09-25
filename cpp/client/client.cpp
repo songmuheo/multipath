@@ -95,8 +95,7 @@ public:
     }
 
     void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
-        // 할당 하지 말아보기
-        // frame->pts = frame_counter++;
+        frame->pts = frame_counter++;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
 
