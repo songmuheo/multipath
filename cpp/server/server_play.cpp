@@ -29,8 +29,13 @@ extern "C" {
 }
 
 // Packet header structure
+// struct PacketHeader {
+//     uint64_t timestamp;
+//     uint32_t sequence_number;
+// };
 struct PacketHeader {
-    uint64_t timestamp;
+    uint64_t timestamp_frame;
+    uint64_t timestamp_sending;
     uint32_t sequence_number;
 };
 
@@ -93,7 +98,7 @@ void process_packet(int sockfd, struct sockaddr_in& client_addr, socklen_t addr_
 
         std::string source_ip = inet_ntoa(client_addr.sin_addr);
         uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        double latency = (receive_time - header.timestamp) / 1000.0;  // Convert to milliseconds
+        double latency = (receive_time - header.timestamp_sending) / 1000.0;  // Convert to milliseconds
 
         // Log packet information for the specific socket
         // log_packet_info(source_ip, header.sequence_number, latency, window_name);
@@ -131,7 +136,7 @@ void process_combined_packets(int sockfd1, int sockfd2, AVCodecContext* codec_ct
 
                     std::string source_ip = inet_ntoa(client_addr.sin_addr);
                     uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    double latency = (receive_time - header.timestamp) / 1000.0;
+                    double latency = (receive_time - header.timestamp_sending) / 1000.0;
 
                     bool is_first_arrival = false;
 
@@ -162,7 +167,7 @@ void process_combined_packets(int sockfd1, int sockfd2, AVCodecContext* codec_ct
 
                     std::string source_ip = inet_ntoa(client_addr.sin_addr);
                     uint64_t receive_time = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                    double latency = (receive_time - header.timestamp) / 1000.0;
+                    double latency = (receive_time - header.timestamp_sending) / 1000.0;
 
                     bool is_first_arrival = false;
 

@@ -19,8 +19,8 @@ const std::string BASE_FILEPATH = "/home/widen/";
 // File path to save png files
 const std::string SAVE_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/";
 
-// const char* INTERFACE1_IP = "10.16.130.87";
-const char* INTERFACE1_IP = "192.168.0.19";
+const char* INTERFACE1_IP = "10.121.134.99";
+// const char* INTERFACE1_IP = "192.168.0.19";
 const char* INTERFACE1_NAME = "wlp1s0";
 const char* INTERFACE2_IP = "192.168.0.24";
 const char* INTERFACE2_NAME = "wlx588694fd23d6";

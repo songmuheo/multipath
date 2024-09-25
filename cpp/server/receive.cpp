@@ -14,8 +14,8 @@
 #include "config.h"
 
 struct PacketHeader {
-    uint64_t timestamp_frame;   // 8 bytes, microsecond 단위
-    uint64_t timestamp_sending; // 8 bytes, microsecond 단위
+    uint64_t timestamp_frame;   // 8 bytes, microsecond 단위, timestamp 생성시의 시점 (인코딩과는 다름)
+    uint64_t timestamp_sending; // 8 bytes, microsecond 단위, 해당 패킷을 위한 데이터 인코딩 이후 시점(보냈을 때의 시점)
     uint32_t sequence_number;   // 4 bytes
 };
 
@@ -117,11 +117,12 @@ void receive_packets(int port, const char* log_filepath, const char* bin_filepat
         // 패킷 정보 로그 파일에 기록
         log_packet_info(log_filepath, client_ip, header->sequence_number, header->timestamp_frame, header->timestamp_sending, received_time_us, network_latency_us, len);
 
-        // 패킷 데이터 파일로 저장
+        // 패킷 데이터 파일로 저장 - 사용자 정의 헤더를 포함한 패킷 전체 저장
         std::string bin_filepath_with_seq = std::string(bin_filepath) + std::to_string(header->sequence_number) + "_" +
                 std::to_string(header->timestamp_sending) + "_" + std::to_string(received_time_us) + "_" + std::to_string(header->timestamp_frame) + ".bin";
-        // save_packet_data(bin_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
         save_packet_data(bin_filepath_with_seq.c_str(), buffer, len);
+
+        // save_packet_data(bin_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
     }
 
     logfile.close();
