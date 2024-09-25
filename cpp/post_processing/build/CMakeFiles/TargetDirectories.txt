@@ -1,3 +1,0 @@
-/home/songmu/Multipath/cpp/post_processing/build/CMakeFiles/rebuild_cache.dir
-/home/songmu/Multipath/cpp/post_processing/build/CMakeFiles/edit_cache.dir
-/home/songmu/Multipath/cpp/post_processing/build/CMakeFiles/MakeFramesProcessing.dir
