@@ -188,7 +188,7 @@ void process_stream(const std::string& stream_name) {
         std::cout << "\n\nsize of header : " << sizeof(PacketHeader) << std::endl; 
         // 추후 frame_pts를 얻기 위한 변수 선언
         // int64_t frame_pts = -1;
-
+        break;
         // 이 frame이 쓰일지? 여기서는 network_latency만 고려
         bool is_use = false;
         if (network_latency <= DELAY) {  // 50ms = 50000us

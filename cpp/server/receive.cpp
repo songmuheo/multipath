@@ -120,9 +120,9 @@ void receive_packets(int port, const char* log_filepath, const char* bin_filepat
         // 패킷 데이터 파일로 저장 - 사용자 정의 헤더를 포함한 패킷 전체 저장
         std::string bin_filepath_with_seq = std::string(bin_filepath) + std::to_string(header->sequence_number) + "_" +
                 std::to_string(header->timestamp_sending) + "_" + std::to_string(received_time_us) + "_" + std::to_string(header->timestamp_frame) + ".bin";
-        save_packet_data(bin_filepath_with_seq.c_str(), buffer, len);
+        // save_packet_data(bin_filepath_with_seq.c_str(), buffer, len);
 
-        // save_packet_data(bin_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
+        save_packet_data(bin_filepath_with_seq.c_str(), buffer + sizeof(PacketHeader), len - sizeof(PacketHeader));
     }
 
     logfile.close();
