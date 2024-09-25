@@ -157,46 +157,29 @@ void process_stream(const std::string& stream_name) {
         }
 
         //  Read the header
-        PacketHeader header;
-        infile.read(reinterpret_cast<char*>(&header), sizeof(PacketHeader));
-        if (infile.gcount() != sizeof(PacketHeader)) {
-            std::cerr << "Error reading header" << std::endl;
-            infile.close(); // Close the file before returning
-            return;
-        } 
+        // PacketHeader header;
+        // infile.read(reinterpret_cast<char*>(&header), sizeof(PacketHeader));
+        // if (infile.gcount() != sizeof(PacketHeader)) {
+        //     std::cerr << "Error reading header" << std::endl;
+        //     infile.close(); // Close the file before returning
+        //     return;
+        // } 
         
-        // 나머지 데이터를 읽어서 인코딩된 데이터로 간주
+        // // 나머지 데이터를 읽어서 인코딩된 데이터로 간주
+        // std::vector<uint8_t> encoded_data((std::istreambuf_iterator<char>(infile)),
+        //                                 std::istreambuf_iterator<char>());
+
         std::vector<uint8_t> encoded_data((std::istreambuf_iterator<char>(infile)),
-                                        std::istreambuf_iterator<char>());
+                                         std::istreambuf_iterator<char>());
 
         infile.close();
-        
-        
-        // 인코딩 데이터 로그 추가
-        std::cout << "Encoded data size: " << encoded_data.size() << " bytes" << std::endl;
-        if (!encoded_data.empty()) {
-            std::cout << "First 4 bytes of encoded data: "
-                      << std::hex << std::setw(2) << std::setfill('0')
-                      << static_cast<int>(encoded_data[0]) << " "
-                      << static_cast<int>(encoded_data[1]) << " "
-                      << static_cast<int>(encoded_data[2]) << " "
-                      << static_cast<int>(encoded_data[3]) << std::dec << std::endl;
-        }
 
-        std::cout << "sequence_number: " << header.sequence_number << "\ntimestamp_sending: " << header.timestamp_sending << "\ntimestamp_frame: " << header.timestamp_frame << std::endl;
-        
-        std::cout << "\n\nsize of header : " << sizeof(PacketHeader) << std::endl; 
-        // 추후 frame_pts를 얻기 위한 변수 선언
-        // int64_t frame_pts = -1;
-        break;
-        // 이 frame이 쓰일지? 여기서는 network_latency만 고려
         bool is_use = false;
         if (network_latency <= DELAY) {  // 50ms = 50000us
             is_use = true;
 
-            // 패킷 생성 및 데이터 설정 (재생용 디코더)
+            // 패킷 생성 및 데이터 설정
             AVPacket* packet = av_packet_alloc();
-            // av_init_packet(packet_playback); // av_packet_alloc()으로 대체됨
             packet->data = encoded_data.data();
             packet->size = encoded_data.size();
 
