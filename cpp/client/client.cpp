@@ -41,7 +41,8 @@ public:
         // Open the CSV log file
         open_log_file();
 
-        codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+        // codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
+        codec = avcodec_find_encoder_by_name("libx265");
         if (!codec) throw runtime_error("Codec not found");
 
         codec_ctx.reset(avcodec_alloc_context3(codec));
@@ -57,21 +58,34 @@ public:
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
         codec_ctx->thread_count = 4;
 
-        av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
-        av_opt_set(codec_ctx->priv_data, "b-adapt", "0", 0); // B-프레임 적응 비활성화
-        av_opt_set(codec_ctx->priv_data, "bframes", "0", 0); // B-프레임 수를 0으로 설정
-        av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
-        av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
-        av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
-        av_opt_set(codec_ctx->priv_data, "no-open-gop", "1", 0); // Open-GOP 비활성화
-        av_opt_set(codec_ctx->priv_data, "vbv-bufsize", "0", 0); // VBV 버퍼 크기 제거
-        av_opt_set(codec_ctx->priv_data, "vbv-maxrate", "0", 0); // VBV 최대 비트레이트 제거
+        // av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
+        // av_opt_set(codec_ctx->priv_data, "b-adapt", "0", 0); // B-프레임 적응 비활성화
+        // av_opt_set(codec_ctx->priv_data, "bframes", "0", 0); // B-프레임 수를 0으로 설정
+        // av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
+        // av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
+        // av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
+        // av_opt_set(codec_ctx->priv_data, "no-open-gop", "1", 0); // Open-GOP 비활성화
+        // av_opt_set(codec_ctx->priv_data, "vbv-bufsize", "0", 0); // VBV 버퍼 크기 제거
+        // av_opt_set(codec_ctx->priv_data, "vbv-maxrate", "0", 0); // VBV 최대 비트레이트 제거
         // av_opt_set(codec_ctx->priv_data, "crf", "20", 0);  // CRF 모드로 전환
         // av_opt_set(codec_ctx->priv_data, "preset", "", 0);
+        
+        // AVDictionary를 사용하여 옵션 설정
+        AVDictionary* opt = NULL;
+        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:no-scenecut", 0);
 
-        if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
+        // 코덱 열기
+        if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
             throw runtime_error("Could not open codec");
         }
+        
+        // if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
+        //     throw runtime_error("Could not open codec");
+        // }
+
+        // 딕셔너리 해제
+        av_dict_free(&opt);
+
 
         frame.reset(av_frame_alloc());
         if (!frame) throw runtime_error("Could not allocate video frame");
