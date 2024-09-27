@@ -56,13 +56,18 @@ public:
         codec_ctx->gop_size = 10;
         codec_ctx->max_b_frames = 0;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-        codec_ctx->thread_count = 4;
+        // codec_ctx->thread_count = 4;
+        // 멀티스레딩은 성능을 향상시키지만, 지연을 증가시킬 수 있습니다. 프레임 스레드 수를 1로 설정하면 버퍼링이 감소합니다.
+        codec_ctx->thread_type = FF_THREAD_SLICE;
+        codec_ctx->thread_count = 1;
+
         
         // AVDictionary를 사용하여 옵션 설정
         AVDictionary* opt = NULL;
 
         // 압축효율은 안좋지만, 인코딩 속도를 빠르게 해줌
         av_dict_set(&opt, "preset", "ultrafast", 0);
+        av_dict_set(&opt, "tune", "zerolatency", 0);
 
         // preset=ultrafast: 인코딩 속도를 최대로 높입니다.
         // keyint=10:min-keyint=10: 키프레임 간격을 고정합니다.
@@ -71,8 +76,9 @@ public:
         // rc-lookahead=0: 레이트 컨트롤을 위한 프레임 미리보기를 비활성화합니다.
         // ref=1: 참조 프레임 수를 1로 설정하여 지연을 최소화합니다.
         // sync-lookahead=0: 동기화 미리보기를 비활성화하여 추가 지연을 방지합니다.
+        // 슬라이스 크기를 제한하면 네트워크 패킷 크기에 맞게 조절할 수 있으며, 지연을 줄이는 데 도움이 됩니다.
         // 위처럼 잔뜩 설정해서, 화질 저하는 될 수 있지만, 그래도 극도의 효율을 추구할 수는 있음
-        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0:bframes=0:rc-lookahead=0:ref=1:sync-lookahead=0", 0);
+        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0:bframes=0:rc-lookahead=0:ref=1:sync-lookahead=0:slice-max-size=1500", 0);
 
 
 
