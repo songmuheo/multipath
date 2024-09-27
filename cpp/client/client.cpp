@@ -66,6 +66,7 @@ public:
         av_opt_set(codec_ctx->priv_data, "no-open-gop", "1", 0); // Open-GOP 비활성화
         av_opt_set(codec_ctx->priv_data, "vbv-bufsize", "0", 0); // VBV 버퍼 크기 제거
         av_opt_set(codec_ctx->priv_data, "vbv-maxrate", "0", 0); // VBV 최대 비트레이트 제거
+        av_opt_set(codec_ctx->priv_data, "crf", "20", 0);  // CRF 모드로 전환
         av_opt_set(codec_ctx->priv_data, "preset", "veryslow", 0);
 
         if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
