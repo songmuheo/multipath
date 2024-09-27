@@ -72,13 +72,13 @@ public:
         
         // AVDictionary를 사용하여 옵션 설정
         AVDictionary* opt = NULL;
-        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:no-scenecut", 0);
+        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0", 0);
 
         // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
             throw runtime_error("Could not open codec");
         }
-        
+
         // if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
         //     throw runtime_error("Could not open codec");
         // }
