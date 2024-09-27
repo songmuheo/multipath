@@ -55,13 +55,17 @@ public:
         codec_ctx->gop_size = 10;
         codec_ctx->max_b_frames = 0;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-        av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
+        codec_ctx->thread_count = 4;
 
+        av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
+        av_opt_set(codec_ctx->priv_data, "b-adapt", "0", 0); // B-프레임 적응 비활성화
+        av_opt_set(codec_ctx->priv_data, "bframes", "0", 0); // B-프레임 수를 0으로 설정
         av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
         av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
         av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
-
-        codec_ctx->thread_count = 4;
+        av_opt_set(codec_ctx->priv_data, "no-open-gop", "1", 0); // Open-GOP 비활성화
+        av_opt_set(codec_ctx->priv_data, "vbv-bufsize", "0", 0); // VBV 버퍼 크기 제거
+        av_opt_set(codec_ctx->priv_data, "vbv-maxrate", "0", 0); // VBV 최대 비트레이트 제거
         av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);
 
         if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
