@@ -53,8 +53,13 @@ public:
         codec_ctx->time_base = { 1, FPS };
         codec_ctx->framerate = { FPS, 1 };
         codec_ctx->gop_size = 10;
-        codec_ctx->max_b_frames = 1;
+        codec_ctx->max_b_frames = 0;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+        av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
+
+        av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
+        av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
+        // av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
 
         codec_ctx->thread_count = 4;
         av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);

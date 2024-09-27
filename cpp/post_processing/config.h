@@ -15,12 +15,12 @@ const int DELAYS[] = {DELAY_33, DELAY_50, DELAY_100, NODELAY};
 const std::string DELAY_LABELS[] = {"33", "50", "100", "no_delay"};
 
 
-// const std::string BASE_FILEPATH = "/home/songmu/";
-const std::string BASE_FILEPATH = "/home/widen/";
+const std::string BASE_FILEPATH = "/home/songmu/";
+// const std::string BASE_FILEPATH = "/home/widen/";
 
 
-const std::string CLIENT_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/2024_09_26_22_47/";
-const std::string SERVER_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/server/2024_09_26_22_47/";
+const std::string CLIENT_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/2024_09_27_13_44/";
+const std::string SERVER_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/server/2024_09_27_13_44/";
 
 // bin files이 저장되어 있는 filepath
 const std::string BINS_FILEPATH = SERVER_FILEPATH + "bins/";
