@@ -59,7 +59,7 @@ public:
 
         av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
         av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
-        // av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
+        av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
 
         codec_ctx->thread_count = 4;
         av_opt_set(codec_ctx->priv_data, "preset", "ultrafast", 0);
