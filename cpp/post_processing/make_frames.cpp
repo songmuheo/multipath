@@ -151,6 +151,13 @@ void process_stream(const std::string& stream_name) {
 
         const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
         AVCodecContext* codec_ctx = avcodec_alloc_context3(codec);
+
+        // 디코더 설정 수정
+        // 버퍼링을 없애기 위한 ? -> 디코더 안의 버퍼링
+        codec_ctx->thread_type = FF_THREAD_SLICE;
+        codec_ctx->thread_count = 1;
+        codec_ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+
         if (!codec || !codec_ctx) {
             std::cerr << "Codec not found or could not allocate context for delay " << delay_label << std::endl;
             continue;
