@@ -78,7 +78,7 @@ public:
         // sync-lookahead=0: 동기화 미리보기를 비활성화하여 추가 지연을 방지합니다.
         // 슬라이스 크기를 제한하면 네트워크 패킷 크기에 맞게 조절할 수 있으며, 지연을 줄이는 데 도움이 됩니다.
         // 위처럼 잔뜩 설정해서, 화질 저하는 될 수 있지만, 그래도 극도의 효율을 추구할 수는 있음
-        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0:bframes=0:rc-lookahead=0:ref=1:sync-lookahead=0:slice-max-size=1500", 0);
+        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0:bframes=2:rc-lookahead=0:ref=1:sync-lookahead=0:slice-max-size=1500", 0);
 
 
 
