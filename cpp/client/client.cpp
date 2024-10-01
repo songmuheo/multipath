@@ -79,7 +79,7 @@ public:
         // 슬라이스 크기를 제한하면 네트워크 패킷 크기에 맞게 조절할 수 있으며, 지연을 줄이는 데 도움이 됩니다.
         // 위처럼 잔뜩 설정해서, 화질 저하는 될 수 있지만, 그래도 극도의 효율을 추구할 수는 있음
         av_dict_set(&opt, "x265-params", "keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:"
-                    ":vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
+                    "vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
 
         // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
