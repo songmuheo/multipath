@@ -214,7 +214,7 @@ private:
                 chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
 
-            uint64_t encoding_latency = (header.timestamp_frame - header.timestamp_sending) / 1000.0;
+            uint64_t encoding_latency = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
