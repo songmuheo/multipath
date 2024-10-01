@@ -214,11 +214,13 @@ private:
                 chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
 
+            uint64_t encoding_latency = (header.timestamp_frame - header.timestamp_sending) / 1000.0
+
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, header.timestamp_frame, header.timestamp_sending, frame->pts);
+            log_packet_to_csv(sequence_number - 1, pkt->size, header.timestamp_frame, header.timestamp_sending, frame->pts, encoding_latency);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
@@ -253,13 +255,13 @@ private:
         log_file << "Sequence_number,PTS,Size,Timestamp_frame,Timstamp_sending,Encoding_latency\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, uint64_t encoding_latency) {
         log_file << sequence_number << "," 
                  << pts << ","
                  << size << ","
                  << timestamp << "," 
                  << sendtime << ","
-                 << (timestamp - sendtime) / 1000.0 << ","
+                 << encoding_latency << ","
                  << "\n";
     }
 
