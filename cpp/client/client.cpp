@@ -78,30 +78,13 @@ public:
         // sync-lookahead=0: 동기화 미리보기를 비활성화하여 추가 지연을 방지합니다.
         // 슬라이스 크기를 제한하면 네트워크 패킷 크기에 맞게 조절할 수 있으며, 지연을 줄이는 데 도움이 됩니다.
         // 위처럼 잔뜩 설정해서, 화질 저하는 될 수 있지만, 그래도 극도의 효율을 추구할 수는 있음
-        av_dict_set(&opt, "x265-params", "keyint=10:min-keyint=10:scenecut=0:bframes=2:rc-lookahead=0:ref=1:sync-lookahead=0:slice-max-size=1500", 0);
-
-
-
-        // av_opt_set(codec_ctx->priv_data, "scenecut", "0", 0);   // Scene Change Detection 비활성화
-        // av_opt_set(codec_ctx->priv_data, "b-adapt", "0", 0); // B-프레임 적응 비활성화
-        // av_opt_set(codec_ctx->priv_data, "bframes", "0", 0); // B-프레임 수를 0으로 설정
-        // av_opt_set(codec_ctx->priv_data, "keyint", "10", 0);    // GoP 크기를 10으로 고정
-        // av_opt_set(codec_ctx->priv_data, "min-keyint", "10", 0);    // 최소 GoP 크기를 10으로 설정
-        // av_opt_set(codec_ctx->priv_data, "max-keyint", "10", 0);    // 최대 GoP 크기를 10으로 설정
-        // av_opt_set(codec_ctx->priv_data, "no-open-gop", "1", 0); // Open-GOP 비활성화
-        // av_opt_set(codec_ctx->priv_data, "vbv-bufsize", "0", 0); // VBV 버퍼 크기 제거
-        // av_opt_set(codec_ctx->priv_data, "vbv-maxrate", "0", 0); // VBV 최대 비트레이트 제거
-        // av_opt_set(codec_ctx->priv_data, "crf", "20", 0);  // CRF 모드로 전환
-        // av_opt_set(codec_ctx->priv_data, "preset", "", 0);
+        av_dict_set(&opt, "x265-params", "keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:sync-lookahead=0:slice-max-size=1500
+                    :bitrate=4000:vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
 
         // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
             throw runtime_error("Could not open codec");
         }
-
-        // if (avcodec_open2(codec_ctx.get(), codec, nullptr) < 0) {
-        //     throw runtime_error("Could not open codec");
-        // }
 
         // 딕셔너리 해제
         av_dict_free(&opt);
@@ -224,7 +207,7 @@ private:
         int packet_count = 0;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             PacketHeader header;
-            // Frame이 생성 됐을 때의 time -> 현재 Encoded data의 sequence_number와 같은 frame은 아니다(GoP 등의 설정에 따라 다름)
+            // Frame이 생성 됐을 때의 time -> 현재 Encoded data의 sequence_number와 같은 frame이 아닐 수 있음
             header.timestamp_frame = timestamp_frame;
             // Encoded data가 생성됐을 때의 time (Sending하기 직전의 time)
             header.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
@@ -267,15 +250,15 @@ private:
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "SequenceNumber,Size,Timestamp_frame,Timstamp_sending,PTS\n";
+        log_file << "Sequence_number,PTS,Size,Timestamp_frame,Timstamp_sending,Encoding_latency\n";
     }
 
     void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts) {
         log_file << sequence_number << "," 
-                 << size << "," 
+                 << pts << "," 
                  << timestamp << "," 
                  << sendtime << ","
-                 << pts << "," 
+                 << (timestamp - sendtime) / 1000.0 << ","
                  << "\n";
     }
 
