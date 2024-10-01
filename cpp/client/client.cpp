@@ -214,7 +214,7 @@ private:
                 chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
 
-            uint64_t encoding_latency = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
+            double encoding_latency = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
@@ -255,7 +255,7 @@ private:
         log_file << "Sequence_number,PTS,Size,Timestamp_frame,Timstamp_sending,Encoding_latency\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, uint64_t encoding_latency) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, double encoding_latency) {
         log_file << sequence_number << "," 
                  << pts << ","
                  << size << ","
