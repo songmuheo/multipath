@@ -255,7 +255,8 @@ private:
 
     void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts) {
         log_file << sequence_number << "," 
-                 << pts << "," 
+                 << pts << ","
+                 << size << ","
                  << timestamp << "," 
                  << sendtime << ","
                  << (timestamp - sendtime) / 1000.0 << ","
