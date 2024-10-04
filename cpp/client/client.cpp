@@ -82,6 +82,8 @@ public:
         av_dict_set(&opt, "psy-rdoq", "0", 0);
         av_dict_set(&opt, "b-adapt", "0", 0);
         av_dict_set(&opt, "ref", "1", 0);
+        av_dict_set(&opt, "slices", "4", 0);  // 프레임을 4개의 슬라이스로 분할
+
 
         // H.265 설정
         // av_dict_set(&opt, "preset", "ultrafast", 0);

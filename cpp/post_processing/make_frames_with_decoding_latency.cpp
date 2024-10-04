@@ -142,7 +142,7 @@ void process_stream(const std::string& stream_name) {
         std::string delay_label = DELAY_LABELS[&delay - DELAYS];
 
         // 디코더 초기화
-        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
+        const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
         AVCodecContext* codec_ctx_measure = avcodec_alloc_context3(codec);  // 디코딩 시간 측정용 디코더
         AVCodecContext* codec_ctx_playback = avcodec_alloc_context3(codec); // 실제 재생용 디코더
 
