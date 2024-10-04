@@ -72,8 +72,8 @@ public:
         av_dict_set(&opt, "bframes", "0", 0);
         av_dict_set(&opt, "b-adapt", "0", 0);
         av_dict_set(&opt, "strict-cbr", "1", 0);
-        av_dict_set(&opt, "vbv-maxrate", "4000", 0);
-        av_dict_set(&opt, "vbv-bufsize", "4000", 0);
+        av_dict_set(&opt, "vbv-maxrate", "2000", 0);
+        av_dict_set(&opt, "vbv-bufsize", "2000", 0);
         av_dict_set(&opt, "scenecut", "0", 0);
         av_dict_set(&opt, "rc-lookahead", "0", 0);
         av_dict_set(&opt, "keyint", "30", 0);
@@ -83,6 +83,7 @@ public:
         av_dict_set(&opt, "b-adapt", "0", 0);
         av_dict_set(&opt, "ref", "1", 0);
         av_dict_set(&opt, "slices", "4", 0);  // 프레임을 4개의 슬라이스로 분할
+        av_dict_set(&opt, "qp", "28", 0);  // QP 값 고정 (값은 20~30 사이에서 실험적 설정)
 
 
         // H.265 설정
