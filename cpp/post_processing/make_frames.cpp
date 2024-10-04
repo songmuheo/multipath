@@ -86,24 +86,6 @@ void process_decoded_frame(AVFrame* frame, int sequence_number, uint64_t timesta
     av_frame_free(&bgr_frame);
 }
 
-// void flush_decoder(AVCodecContext* codec_ctx, const std::string& output_dir_base, const std::string& stream_name, const std::string& delay_label) {
-//     AVFrame* frame = av_frame_alloc();
-//     int ret;
-//     while ((ret = avcodec_receive_frame(codec_ctx, frame)) == 0) {
-//         std::string output_dir = output_dir_base + "_delay_" + delay_label;
-//         fs::create_directories(output_dir);
-//         process_decoded_frame(frame, -1, 0, 0, frame->pts, output_dir);  // 임의의 sequence_number와 timestamp들
-//         std::cout << "[" << stream_name << " | delay_" << delay_label << "] 플러쉬된 프레임 pts: " << frame->pts << "이(가) 저장되었습니다." << std::endl;
-//         av_frame_free(&frame);
-//         frame = av_frame_alloc();
-//     }
-
-//     if (ret != AVERROR_EOF && ret != AVERROR(EAGAIN)) {
-//         std::cerr << "[" << stream_name << "] Error receiving frame from decoder during flush: " << get_av_error(ret) << std::endl;
-//     }
-
-//     av_frame_free(&frame);
-// }
 
 void process_stream(const std::string& stream_name) {
     std::string bin_folder = BINS_FILEPATH + stream_name;
@@ -249,7 +231,7 @@ void process_stream(const std::string& stream_name) {
                 if (ret == 0) {
                     std::string output_dir = output_dir_base + "_delay_" + delay_label;
                     fs::create_directories(output_dir);
-                    process_decoded_frame(frame, sequence_number, timestamp_sending, timestamp_frame, frame->pts, output_dir);
+                    process_decoded_frame(frame, sequence_number, timestamp_sending, received_time, timestamp_frame, output_dir);
                     std::cout << "[" << stream_name << " | delay_" << delay_label << "] 프레임 seq_num: " << sequence_number << ", pts: " << frame->pts << "이(가) 사용되었습니다." << std::endl;
                     av_frame_free(&frame);
                 } else if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {

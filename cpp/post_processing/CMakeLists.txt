@@ -18,7 +18,7 @@ include_directories(
     ${OPENCV_INCLUDE_DIRS}
 )
 
-add_executable(MakeFramesProcessing make_frames.cpp)
+add_executable(MakeFramesProcessing make_frames_with_decoding_latency.cpp)
 
 target_link_libraries(MakeFramesProcessing
     ${AVCODEC_LIBRARIES}

@@ -42,7 +42,8 @@ public:
         open_log_file();
 
         // codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-        codec = avcodec_find_encoder_by_name("libx265");
+        // codec = avcodec_find_encoder_by_name("libx265");
+        codec = avcodec_find_encoder_by_name("libx264");
         if (!codec) throw runtime_error("Codec not found");
 
         codec_ctx.reset(avcodec_alloc_context3(codec));
@@ -65,21 +66,27 @@ public:
         // AVDictionary를 사용하여 옵션 설정
         AVDictionary* opt = NULL;
 
-        // 압축효율은 안좋지만, 인코딩 속도를 빠르게 해줌
+        // 실시간 스트리밍 및 실험을 위한 제한된 설정 적용 (H.264)
         av_dict_set(&opt, "preset", "ultrafast", 0);
         av_dict_set(&opt, "tune", "zerolatency", 0);
+        av_dict_set(&opt, "bframes", "0", 0);
+        av_dict_set(&opt, "strict-cbr", "1", 0);
+        av_dict_set(&opt, "vbv-maxrate", "4000", 0);
+        av_dict_set(&opt, "vbv-bufsize", "4000", 0);
+        av_dict_set(&opt, "scenecut", "0", 0);
+        av_dict_set(&opt, "rc-lookahead", "0", 0);
+        av_dict_set(&opt, "keyint", "30", 0);
+        av_dict_set(&opt, "aq-mode", "0", 0);
+        av_dict_set(&opt, "psy-rd", "0", 0);
+        av_dict_set(&opt, "psy-rdoq", "0", 0);
+        av_dict_set(&opt, "b-adapt", "0", 0);
+        av_dict_set(&opt, "ref", "1", 0);
 
-        // preset=ultrafast: 인코딩 속도를 최대로 높입니다.
-        // keyint=10:min-keyint=10: 키프레임 간격을 고정합니다.
-        // scenecut=0: 씬 컷 감지를 비활성화하여 추가 키프레임 생성을 방지합니다.
-        // bframes=0: B-프레임 사용을 비활성화하여 지연을 줄입니다.
-        // rc-lookahead=0: 레이트 컨트롤을 위한 프레임 미리보기를 비활성화합니다.
-        // ref=1: 참조 프레임 수를 1로 설정하여 지연을 최소화합니다.
-        // sync-lookahead=0: 동기화 미리보기를 비활성화하여 추가 지연을 방지합니다.
-        // 슬라이스 크기를 제한하면 네트워크 패킷 크기에 맞게 조절할 수 있으며, 지연을 줄이는 데 도움이 됩니다.
-        // 위처럼 잔뜩 설정해서, 화질 저하는 될 수 있지만, 그래도 극도의 효율을 추구할 수는 있음
-        av_dict_set(&opt, "x265-params", "keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:"
-                    "vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
+        // H.265 설정
+        // av_dict_set(&opt, "preset", "ultrafast", 0);
+        // av_dict_set(&opt, "tune", "zerolatency", 0);
+        // av_dict_set(&opt, "x265-params", "keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:"
+        //             "vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
 
         // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
