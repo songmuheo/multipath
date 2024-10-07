@@ -54,11 +54,9 @@ public:
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = { 1, FPS };
         codec_ctx->framerate = { FPS, 1 };
-        codec_ctx->gop_size = 10;
+        // codec_ctx->gop_size = 10;
         codec_ctx->max_b_frames = 0;
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-        // codec_ctx->thread_count = 4;
-        // 멀티스레딩은 성능을 향상시키지만, 지연을 증가시킬 수 있습니다. 프레임 스레드 수를 1로 설정하면 버퍼링이 감소합니다.
         codec_ctx->thread_type = FF_THREAD_SLICE;
         codec_ctx->thread_count = 1;
 
@@ -77,6 +75,7 @@ public:
         av_dict_set(&opt, "scenecut", "0", 0);
         av_dict_set(&opt, "rc-lookahead", "0", 0);
         av_dict_set(&opt, "keyint", "30", 0);
+        av_dict_set(&opt, "min-keyint", "30", 0);
         av_dict_set(&opt, "aq-mode", "0", 0);
         av_dict_set(&opt, "psy-rd", "0", 0);
         av_dict_set(&opt, "psy-rdoq", "0", 0);

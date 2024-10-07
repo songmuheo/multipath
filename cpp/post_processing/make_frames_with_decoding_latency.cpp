@@ -56,6 +56,21 @@ std::vector<std::string> get_bin_files_sorted(const std::string& folder_path) {
     return bin_files;
 }
 
+// Get frame type
+std::string get_frame_type_string(AVFrame* frame) {
+    switch (frame->pict_type) {
+        case AV_PICTURE_TYPE_I: return "I";
+        case AV_PICTURE_TYPE_P: return "P";
+        case AV_PICTURE_TYPE_B: return "B";
+        case AV_PICTURE_TYPE_S: return "S";
+        case AV_PICTURE_TYPE_SI: return "SI";
+        case AV_PICTURE_TYPE_SP: return "SP";
+        case AV_PICTURE_TYPE_BI: return "BI";
+        default: return "Unknown";
+    }
+}
+
+
 void process_decoded_frame(AVFrame* frame, int sequence_number, uint64_t timestamp_sending, uint64_t received_time, uint64_t timestamp_frame, const std::string& output_dir) {
     // AVFrame을 OpenCV Mat로 변환
     int width = frame->width;
@@ -168,20 +183,16 @@ void process_stream(const std::string& stream_name) {
         }
 
         // csv file 헤더 추가
-        // size_t total_latency_index = std::find(headers.begin(), headers.end(), "total_latency_" + delay_label) - headers.begin();
         size_t is_use_index = std::find(headers.begin(), headers.end(), "is_use_" + delay_label) - headers.begin();
         size_t encoding_latency_index = std::find(headers.begin(), headers.end(), "encoding_latency") - headers.begin();
         size_t decoding_latency_index = std::find(headers.begin(), headers.end(), "decoding_latency") - headers.begin();
+        size_t frame_type_index = std::find(headers.begin(), headers.end(), "frame_type") - headers.begin();
 
-        // bool total_latency_exists = (total_latency_index < headers.size());
         bool is_use_exists = (is_use_index < headers.size());
         bool encoding_latency_exists = (encoding_latency_index < headers.size());
         bool decoding_latency_exists = (decoding_latency_index < headers.size());
+        bool frame_type_exists = (frame_type_index < headers.size());
 
-        // if (!total_latency_exists) {
-        //     headers.push_back("total_latency_" + delay_label);
-        //     total_latency_index = headers.size() - 1;
-        // }
         if (!is_use_exists) {
             headers.push_back("is_use_" + delay_label);
             is_use_index = headers.size() - 1;
@@ -194,7 +205,10 @@ void process_stream(const std::string& stream_name) {
             headers.push_back("decoding_latency");
             decoding_latency_index = headers.size() - 1;
         }
-
+        if (!frame_type_exists) {
+            headers.push_back("frame_type");
+            frame_type_index = headers.size() - 1;
+        }
         for (const auto& bin_file : bin_files) {
             // 파일명에서 정보 추출
             std::string filename = fs::path(bin_file).filename().string();
@@ -272,17 +286,10 @@ void process_stream(const std::string& stream_name) {
             }
             columns[decoding_latency_index] = std::to_string(decoding_latency / 1000.0);
 
-            // if (columns.size() <= total_latency_index) {
-            //     columns.resize(total_latency_index + 1, "");
-            // }
-            // columns[total_latency_index] = std::to_string(total_latency);
-
             if (columns.size() <= is_use_index) {
                 columns.resize(is_use_index + 1, "");
             }
             columns[is_use_index] = is_use ? "true" : "false";
-            
-
         }
 
 
@@ -307,6 +314,19 @@ void process_stream(const std::string& stream_name) {
 
                 if (ret_playback == 0) {
                     // 디코딩 성공
+
+                    // 프레임 타입 얻기
+                    std::string frame_type_string = get_frame_type_string(frame_playback);
+
+                    // CSV 데이터에 프레임 타입 추가
+                    if (csv_data.find(sequence_number) != csv_data.end()) {
+                        auto& columns = csv_data[sequence_number];
+                        if (columns.size() <= frame_type_index) {
+                            columns.resize(frame_type_index + 1, "");
+                        }
+                        columns[frame_type_index] = frame_type_string;
+                    }
+
                     std::string output_dir = output_dir_base + "_delay_" + delay_label;
                     fs::create_directories(output_dir);
                     // 디코딩된 프레임 처리 및 저장

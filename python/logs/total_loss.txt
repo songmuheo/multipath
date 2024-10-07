@@ -1,2 +1,0 @@
-Total Loss in Interface 1: 118
-Total Loss in Interface 2: 12747
