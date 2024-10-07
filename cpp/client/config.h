@@ -13,8 +13,8 @@ const float PACKET_INTERVAL = 0.033;
 const int FPS = 30;
 const int BITRATE = 2000000;
 
-const std::string BASE_FILEPATH = "/home/widen/";
-// const std::string BASE_FILEPATH = "/home/songmu/";
+// const std::string BASE_FILEPATH = "/home/widen/";
+const std::string BASE_FILEPATH = "/home/songmu/";
 
 // File path to save png files
 const std::string SAVE_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/";
