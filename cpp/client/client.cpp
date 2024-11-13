@@ -49,40 +49,42 @@ public:
         codec_ctx.reset(avcodec_alloc_context3(codec));
         if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
 
-        codec_ctx->bit_rate = BITRATE;
-        codec_ctx->width = WIDTH;
-        codec_ctx->height = HEIGHT;
-        codec_ctx->time_base = { 1, FPS };
-        codec_ctx->framerate = { FPS, 1 };
-        // codec_ctx->gop_size = 10;
-        codec_ctx->max_b_frames = 0;
-        codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
-        codec_ctx->thread_type = FF_THREAD_SLICE;
-        codec_ctx->thread_count = 1;
+    codec_ctx->width = WIDTH;
+    codec_ctx->height = HEIGHT;
+    codec_ctx->time_base = {1, FPS};
+    codec_ctx->framerate = {FPS, 1};
+    codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+    codec_ctx->max_b_frames = 0;
+    codec_ctx->thread_type = FF_THREAD_SLICE;
+    codec_ctx->thread_count = 1;
+    // codec_ctx->gop_size = 12; // I-프레임 간격 설정
 
-        
-        // AVDictionary를 사용하여 옵션 설정
-        AVDictionary* opt = NULL;
+    AVDictionary* opt = nullptr;
+    
+    // Preset and tune settings for low latency
+    av_dict_set(&opt, "preset", "veryfast", 0);    // Use "superfast" if you want better compression
+    av_dict_set(&opt, "tune", "zerolatency", 0);
 
-        // 실시간 스트리밍 및 실험을 위한 제한된 설정 적용 (H.264)
-        av_dict_set(&opt, "preset", "ultrafast", 0);
-        av_dict_set(&opt, "tune", "zerolatency", 0);
-        av_dict_set(&opt, "bframes", "0", 0);
-        av_dict_set(&opt, "b-adapt", "0", 0);
-        av_dict_set(&opt, "strict-cbr", "1", 0);
-        av_dict_set(&opt, "vbv-maxrate", "2000", 0);
-        av_dict_set(&opt, "vbv-bufsize", "2000", 0);
-        av_dict_set(&opt, "scenecut", "0", 0);
-        av_dict_set(&opt, "rc-lookahead", "0", 0);
-        av_dict_set(&opt, "keyint", "30", 0);
-        av_dict_set(&opt, "min-keyint", "30", 0);
-        av_dict_set(&opt, "aq-mode", "0", 0);
-        av_dict_set(&opt, "psy-rd", "0", 0);
-        av_dict_set(&opt, "psy-rdoq", "0", 0);
-        av_dict_set(&opt, "b-adapt", "0", 0);
-        av_dict_set(&opt, "ref", "1", 0);
-        av_dict_set(&opt, "slices", "4", 0);  // 프레임을 4개의 슬라이스로 분할
-        av_dict_set(&opt, "qp", "28", 0);  // QP 값 고정 (값은 20~30 사이에서 실험적 설정)
+    // Disable B-frames explicitly
+    av_dict_set(&opt, "bframes", "0", 0);
+
+    // Rate control settings
+    av_dict_set(&opt, "crf", "21", 0);                 // Adjust CRF value as needed (lower = better quality)
+    av_dict_set(&opt, "rc-lookahead", "0", 0);         // Disable look-ahead
+    av_dict_set(&opt, "scenecut", "0", 0);             // Disable scene cut detection
+
+    // Keyframe interval settings
+    av_dict_set(&opt, "keyint", "30", 0);              // Set to frame rate
+    av_dict_set(&opt, "min-keyint", "30", 0);          // Force constant keyframe interval
+
+    // Additional settings for latency and quality
+    av_dict_set(&opt, "refs", "2", 0);                 // Use 3 reference frame
+    av_dict_set(&opt, "no-sliced-threads", "1", 0);    // Disable sliced threads for better latency
+    av_dict_set(&opt, "aq-mode", "1", 0);              // Disable adaptive quantization
+    av_dict_set(&opt, "trellis", "0", 0);              // Disable trellis optimization
+
+    av_dict_set(&opt, "psy-rd", "1.0", 0);
+    av_dict_set(&opt, "psy-rdoq", "1.0", 0);
 
 
         // H.265 설정
@@ -262,7 +264,7 @@ private:
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "Sequence_number,PTS,Size,Timestamp_frame,Timstamp_sending,Encoding_latency\n";
+        log_file << "sequence_number,pts,size,timestamp_frame,timstamp_sending,encoding_latency\n";
     }
 
     void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, double encoding_latency) {
