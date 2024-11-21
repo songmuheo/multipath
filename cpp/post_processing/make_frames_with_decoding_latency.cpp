@@ -132,7 +132,7 @@ void process_stream(const std::string& stream_name) {
         headers.push_back(header);
     }
 
-    auto it = std::find(headers.begin(), headers.end(), "sequence number");
+    auto it = std::find(headers.begin(), headers.end(), "sequence_number");
     if (it == headers.end()) {
         std::cerr << "sequence number column not found in CSV file." << std::endl;
         return;

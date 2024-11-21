@@ -55,7 +55,7 @@ void Encoder::init_encoder() {
     av_dict_set(&opt, "min-keyint", "30", 0);          // Force constant keyframe interval
 
     // Additional settings for latency and quality
-    av_dict_set(&opt, "refs", "2", 0);                 // Use 3 reference frame
+    av_dict_set(&opt, "refs", "1", 0);                 // Use 3 reference frame
     av_dict_set(&opt, "no-sliced-threads", "1", 0);    // Disable sliced threads for better latency
     av_dict_set(&opt, "aq-mode", "1", 0);              // Disable adaptive quantization
     av_dict_set(&opt, "trellis", "0", 0);              // Disable trellis optimization

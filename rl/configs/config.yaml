@@ -4,11 +4,12 @@
 mode: train # train or eval
 
 # train mode
-target_model_update_freq: 30
-num_episodes: 2000
+target_model_update_freq: 50
+num_episodes: 1000
 model_save_freq : 100
-training_data_split : 1   #training dataset 비율 -> 현재는 test를 위해 1로 둠
-log_save_freq: 100  # 몇 episode마다 로그를 저장할지
+training_data_split : 0.8   #training dataset 비율 -> 현재는 test를 위해 1로 둠
+log_save_freq: 50  # 몇 episode마다 로그를 저장할지
+history_length: 60 # state를 정의할 때, 평균 및 분산 계산시 window size를 결정함
 
 # evaluate mode
 num_eval_episodes: 5
@@ -18,19 +19,28 @@ model_path: /home/songmu/Multipath/rl/data/results/2024_11_06_21_18/models/dqn_m
 frame_dir: data/frames/frames_og/
 kt_log_dir: 'data/env_logs/kt_log.csv'
 lg_log_dir: 'data/env_logs/lg_log.csv'
-latency_threshold: 100  # ms
-ssim_threshold: 0.85
+latency_threshold: 40  # ms
+ssim_threshold: 0.9
 gamma_reward: 0.1
-max_datasize: 10000
+state_num: 13
+
+# Normalize
+min_datasize: 1000
+max_datasize: 45000
+max_frames_since_loss: 10
+max_frames_since_iframe: 20
+
 
 # 에이전트 하이퍼파라미터
-gamma: 0.99
-epsilon_start: 0.15
+gamma: 0.999
+epsilon_start: 0.2
 epsilon_min: 0.05
-epsilon_decay: 0.995
+epsilon_decay: 0.99
 learning_rate: 0.001
-batch_size: 16
-memory_size: 1500
+batch_size: 64
+memory_size: 10000
+algorithm: 'PPO'  # DQN or PPO
+netowrk: 'AdvancedDQNNetwork'
 actions:
   0:
     - KT

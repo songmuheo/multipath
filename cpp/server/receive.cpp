@@ -44,7 +44,7 @@ void save_packet_data(const char* filepath, const char* data, size_t size) {
 
 void create_log_file(const char* logpath) {
     std::ofstream logfile(logpath, std::ios::app);
-    logfile << "source ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size\n";
+    logfile << "source_ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size\n";
     logfile.close();
 
 }

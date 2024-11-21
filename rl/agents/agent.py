@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from train.model import DQNNetwork
+from train.model import AdvancedDQNNetwork
 from utils.config import load_config
 from collections import deque
 from agents.base_agent import BaseAgent
@@ -17,6 +18,7 @@ class DQNAgent(BaseAgent):
         self.config = config
         self.state_size = state_size
         self.action_size = action_size
+        self.network = config['network']
 
         # 하이퍼파라미터 로드
         self.gamma = self.config['gamma']
@@ -43,7 +45,10 @@ class DQNAgent(BaseAgent):
         self.is_eval_mode = False
 
     def build_model(self):
-        return DQNNetwork(self.state_size, self.action_size)
+        if self.network == 'DQNNetwork':
+            return DQNNetwork(self.state_size, self.action_size)
+        if self.network == 'AdvancedDQNNetwork':
+            return AdvancedDQNNetwork(self.state_size, self.action_size)
     
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
@@ -61,8 +66,11 @@ class DQNAgent(BaseAgent):
         if self.is_eval_mode or np.random.rand() > self.epsilon:
             # 최대 Q 값을 가진 행동 선택
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            self.model.eval()
             with torch.no_grad():
                 act_values = self.model(state_tensor)
+            if not self.is_eval_mode:
+                self.model.train()
             action = torch.argmax(act_values).item()
             max_q_value = torch.max(act_values).item()
             return action, max_q_value

@@ -56,7 +56,7 @@ def train(agent, env, config, results_dir):
                     'Action': action,
                     'Max Q Value': max_q_value if max_q_value is not None else 0.0,
                     'SSIM': info['ssim'],
-                    'Data Size': info['data_size'],
+                    'Data Size': info['datasize'],
                     'Reward': reward,
                     'Return': total_reward,
                     'Loss': loss,
