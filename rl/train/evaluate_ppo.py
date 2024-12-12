@@ -7,7 +7,7 @@ from utils.logger import Logger
 
 def evaluate(agent, env, config, results_dir):
 
-    ssim_max = '/home/songmu/Multipath/rl/data/env_logs/frame_analysis_log.csv'
+    ssim_max = '/home/songmu/multipath/rl/env_logs/frame_analysis_log.csv'
     ssim_max_df = pd.read_csv(ssim_max)
     ssim_max_df_dict = dict(zip(ssim_max_df['Sequence Number'], ssim_max_df['SSIM']))
 

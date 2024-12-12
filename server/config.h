@@ -15,10 +15,7 @@ const int BUFFER_SIZE = 65536;
 const std::string BASE_FILEPATH = "/home/songmu/";
 
 // Path to save bin files(received packet)
-const std::string FILEPATH_TO_SAVE_RAW_PACKET = BASE_FILEPATH + "Multipath/cpp/results/server";
-
-const std::string FILEPATH_FRAME = BASE_FILEPATH + "Multipath/cpp/results/server/frames";
-const std::string FILEPATH_LOG = BASE_FILEPATH + "Multipath/cpp/results/server/logs";
+const std::string FILEPATH_LOG = BASE_FILEPATH + "multipath/server/logs/";
 
 const uint64_t PLAY_DELAY_MS = 50;
 

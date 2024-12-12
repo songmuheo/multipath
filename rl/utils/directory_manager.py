@@ -3,7 +3,7 @@
 import os
 from datetime import datetime
 
-def create_timestamped_directory(base_dir='data/results'):
+def create_timestamped_directory(base_dir='results'):
     """현재 연/월/일/시 기준의 폴더를 생성하고 경로를 반환합니다."""
     now = datetime.now()
     # 날짜와 시간을 기반으로 한 폴더 이름 생성 (예: 2024/11/01/14)

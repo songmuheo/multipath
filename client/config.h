@@ -17,7 +17,7 @@ const int BITRATE = 2000000;
 const std::string BASE_FILEPATH = "/home/songmu/";
 
 // File path to save png files
-const std::string SAVE_FILEPATH = BASE_FILEPATH + "Multipath/cpp/results/client/";
+const std::string SAVE_FILEPATH = BASE_FILEPATH + "multipath/cpp/client/logs";
 
 // const char* INTERFACE1_IP = "10.121.134.99";
 // const char* INTERFACE1_IP = "192.168.0.19";

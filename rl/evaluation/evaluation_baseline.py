@@ -173,7 +173,7 @@ class PerformanceEvaluator:
 
 
 if __name__ == "__main__":
-    frames_dir = "/home/songmu/Multipath/cpp/results/client/2024_12_09_16_07/frames_with_sequence"
-    env_logs_dir = "/home/songmu/Multipath/cpp/results/server/2024_12_09_16_02/logs/"
+    frames_dir = "/home/songmu/multipath/client/logs/2024_12_09_16_07/frames_with_sequence"
+    env_logs_dir = "/home/songmu/multipath/server/logs/2024_12_09_16_02"
     evaluator = PerformanceEvaluator(frames_dir, env_logs_dir)
     evaluator.evaluate()

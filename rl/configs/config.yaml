@@ -15,15 +15,15 @@ load_model_path:  # start initial state
 
 # evaluate 모드 설정
 num_eval_episodes: 1
-model_path: /home/songmu/Multipath/rl/data/results/lab/2024_12_04_14_50/models/ppo_model_episode500.pth
+model_path: /home/songmu/multipath/rl/results/lab/2024_12_04_14_50/models/ppo_model_episode500.pth
 
 # 환경 설정
 # frame_dir: data/frames/frames_og/
-frame_dir: /home/songmu/Multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence
+frame_dir: /home/songmu/multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence
 # kt_log_dir: 'data/env_logs/kt_log.csv'
-kt_log_dir: /home/songmu/Multipath/cpp/results/server/2024_12_10_16_45/logs/kt_log.csv
+kt_log_dir: /home/songmu/multipath/cpp/results/server/2024_12_10_16_45/logs/kt_log.csv
 # lg_log_dir: 'data/env_logs/lg_log.csv'
-lg_log_dir: /home/songmu/Multipath/cpp/results/server/2024_12_10_16_45/logs/lg_log.csv
+lg_log_dir: /home/songmu/multipath/cpp/results/server/2024_12_10_16_45/logs/lg_log.csv
 latency_threshold: 40  # ms
 ssim_threshold: 0.9
 gamma_reward: 0.1

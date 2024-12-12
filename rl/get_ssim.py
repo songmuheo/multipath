@@ -8,7 +8,7 @@ import glob
 import os
 
 # Directory and Encoder/Decoder setup
-frame_dir = '/home/songmu/Multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence'
+frame_dir = '/home/songmu/multipath/client/logs/2024_12_10_17_00/frames_with_sequence'
 encoder = Encoder(640, 480)
 decoder = Decoder()
 

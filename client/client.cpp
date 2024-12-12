@@ -41,8 +41,6 @@ public:
         // Open the CSV log file
         open_log_file();
 
-        // codec = avcodec_find_encoder(AV_CODEC_ID_HEVC);
-        // codec = avcodec_find_encoder_by_name("libx265");
         codec = avcodec_find_encoder_by_name("libx264");
         if (!codec) throw runtime_error("Codec not found");
 
@@ -85,13 +83,6 @@ public:
 
         av_dict_set(&opt, "psy-rd", "1.0", 0);
         av_dict_set(&opt, "psy-rdoq", "1.0", 0);
-
-
-        // H.265 설정
-        // av_dict_set(&opt, "preset", "ultrafast", 0);
-        // av_dict_set(&opt, "tune", "zerolatency", 0);
-        // av_dict_set(&opt, "x265-params", "keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:"
-        //             "vbv-maxrate=4000:vbv-bufsize=4000:strict-cbr=1:intra-refresh=0:aq-mode=0:psy-rd=0:psy-rdoq=0", 0);
 
         // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
