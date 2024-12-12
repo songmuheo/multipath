@@ -1,46 +1,62 @@
 # configs/config.yaml
 
-# 실행
-mode: train # train or eval
+# 실행 설정
+mode: train  # 'train' 또는 'eval'
+algorithm: 'PPO'  # 'DQN' or 'PPO' 'RDQN'
 
-# train mode
-target_model_update_freq: 50
-num_episodes: 1000
-model_save_freq : 100
-training_data_split : 0.8   #training dataset 비율 -> 현재는 test를 위해 1로 둠
-log_save_freq: 50  # 몇 episode마다 로그를 저장할지
-history_length: 60 # state를 정의할 때, 평균 및 분산 계산시 window size를 결정함
+# train 모드 설정
+num_episodes: 2000
+model_save_freq: 10
+training_data_split: 0.75  # training 데이터셋 비율
+log_save_freq: 10  # 몇 에피소드마다 로그를 저장할지
+history_length: 60  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
+load_model_path:  # start initial state
+# "/home/songmu/Multipath/rl/data/results/2024_11_28_14_50/models/ppo_model_episode400.pth"
 
-# evaluate mode
-num_eval_episodes: 5
-model_path: /home/songmu/Multipath/rl/data/results/2024_11_06_21_18/models/dqn_model_episode701.pth
+# evaluate 모드 설정
+num_eval_episodes: 1
+model_path: /home/songmu/Multipath/rl/data/results/lab/2024_12_04_14_50/models/ppo_model_episode500.pth
 
 # 환경 설정
-frame_dir: data/frames/frames_og/
-kt_log_dir: 'data/env_logs/kt_log.csv'
-lg_log_dir: 'data/env_logs/lg_log.csv'
+# frame_dir: data/frames/frames_og/
+frame_dir: /home/songmu/Multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence
+# kt_log_dir: 'data/env_logs/kt_log.csv'
+kt_log_dir: /home/songmu/Multipath/cpp/results/server/2024_12_10_16_45/logs/kt_log.csv
+# lg_log_dir: 'data/env_logs/lg_log.csv'
+lg_log_dir: /home/songmu/Multipath/cpp/results/server/2024_12_10_16_45/logs/lg_log.csv
 latency_threshold: 40  # ms
 ssim_threshold: 0.9
 gamma_reward: 0.1
 state_num: 13
 
-# Normalize
-min_datasize: 1000
-max_datasize: 45000
+# Normalize 설정
+min_datasize: 400
+max_datasize: 50000
 max_frames_since_loss: 10
 max_frames_since_iframe: 20
 
-
 # 에이전트 하이퍼파라미터
-gamma: 0.999
-epsilon_start: 0.2
-epsilon_min: 0.05
-epsilon_decay: 0.99
 learning_rate: 0.001
-batch_size: 64
-memory_size: 10000
-algorithm: 'PPO'  # DQN or PPO
-netowrk: 'AdvancedDQNNetwork'
+
+# PPO
+batch_size_ppo: 8192
+update_timestep: 8192
+mini_batch_size: 512
+epsilon_clip: 0.2
+k_epochs: 10
+entropy_coef: 0.01
+value_loss_coef: 0.5
+lambda_gae: 0.95  # GAE 람다
+gamma: 0.99
+network_ppo: 'ActorCritic2'
+scheduler_type: LinearLR  # CosineAnnealingLR or LinearLR
+scheduler_T_max: 31721             # CosineAnnealingLR에 필요한 매개변수 (T_max)
+start_factor: 1.0 # LinearLR
+end_factor: 0.07  # LinearLR
+total_iters: 100  # LinearLR
+
+
+
 actions:
   0:
     - KT
@@ -61,3 +77,17 @@ actions:
     - Both
     - P-frame
 
+
+# DQN
+batch_size_dqn: 128
+epsilon_start: 1
+epsilon_min: 0.1
+epsilon_decay: 0.99
+memory_size: 50000
+target_model_update_freq: 700
+network_dqn: 'AdvancedDQNNetwork'
+
+# RDQN
+sequence_length: 50  # 시퀀스 길이
+network_rdqn: 'RecurrentDQNNetwork'
+burn_in_length: 20

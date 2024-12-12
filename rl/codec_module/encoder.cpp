@@ -137,7 +137,24 @@ py::bytes Encoder::encode_frame(const std::string& frame_path, bool is_i_frame) 
 
 void Encoder::reset() {
     frame_index = 0;
-    avcodec_flush_buffers(codec_ctx);
+    if (codec_ctx) {
+        avcodec_free_context(&codec_ctx);
+        codec_ctx = nullptr;
+    }
+    if (frame) {
+        av_frame_free(&frame);
+        frame = nullptr;
+    }
+    if (pkt) {
+        av_packet_free(&pkt);
+        pkt = nullptr;
+    }
+    if (sws_ctx) {
+        sws_freeContext(sws_ctx);
+        sws_ctx = nullptr;
+    }
+    // 다시 초기화
+    init_encoder();
 }
 
 void Encoder::close() {

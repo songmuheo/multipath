@@ -8,7 +8,7 @@ import glob
 import os
 
 # Directory and Encoder/Decoder setup
-frame_dir = 'data/frames/frames_og/'
+frame_dir = '/home/songmu/Multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence'
 encoder = Encoder(640, 480)
 decoder = Decoder()
 
@@ -57,38 +57,39 @@ for frame_path in sorted(glob.glob(os.path.join(frame_dir, '*.png')), key=lambda
     decoded_frame = np.array(decoded_frame).reshape((480, 640, 3))  # Reshape decoded data if necessary
 
     # Calculate edge intensity
-    edge_intensity = calculate_edge_intensity(original_frame)
+    # edge_intensity = calculate_edge_intensity(original_frame)
 
     # Calculate high-frequency energy in the frequency domain
-    frequency_energy = calculate_frequency_energy(original_frame)
+    # frequency_energy = calculate_frequency_energy(original_frame)
 
     # Calculate image sharpness
-    sharpness = calculate_sharpness(original_frame)
+    # sharpness = calculate_sharpness(original_frame)
 
     # Calculate SSIM
     ssim_value = calculate_ssim(original_frame, decoded_frame)
 
     # Append results
-    results.append([sequence_number, edge_intensity, frequency_energy, sharpness, ssim_value])
-
+    # results.append([sequence_number, edge_intensity, frequency_energy, sharpness, ssim_value])
+    results.append([sequence_number, ssim_value])
 # Save results to DataFrame
-df = pd.DataFrame(results, columns=['Sequence Number', 'Edge Intensity', 'Frequency Energy', 'Sharpness', 'SSIM'])
+# df = pd.DataFrame(results, columns=['Sequence Number', 'Edge Intensity', 'Frequency Energy', 'Sharpness', 'SSIM'])
+df = pd.DataFrame(results, columns=['Sequence Number', 'SSIM'])
 
 # Plot each metric against SSIM
-metrics = ['Edge Intensity', 'Frequency Energy', 'Sharpness']
-for metric in metrics:
-    plt.figure(figsize=(10, 6))
-    plt.scatter(df[metric], df['SSIM'], s=2)
-    plt.xlabel(metric)
-    plt.ylabel('SSIM')
-    plt.title(f'Relationship between {metric} and SSIM')
-    plt.grid()
-    plt.savefig(f'analyze/results/{metric}_SSIM', format='png')
-    plt.show()
+# metrics = ['Edge Intensity', 'Frequency Energy', 'Sharpness']
+# for metric in metrics:
+#     plt.figure(figsize=(10, 6))
+#     plt.scatter(df[metric], df['SSIM'], s=2)
+#     plt.xlabel(metric)
+#     plt.ylabel('SSIM')
+#     plt.title(f'Relationship between {metric} and SSIM')
+#     plt.grid()
+#     plt.savefig(f'analyze/results/{metric}_SSIM', format='png')
+#     plt.show()
 
 # Plot SSIM over Sequence Number
 plt.figure(figsize=(10, 6))
-plt.plot(df['Sequence Number'], df['SSIM'], label='SSIM', color='blue', markersize=2)
+plt.plot(df['Sequence Number'], df['SSIM'], label='SSIM', color='blue', markersize=0.5)
 plt.xlabel('Sequence Number')
 plt.ylabel('SSIM')
 plt.title('SSIM over Sequence')

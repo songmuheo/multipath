@@ -1,10 +1,7 @@
-# train/model.py
-
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
-
 
 class DQNNetwork(nn.Module):
     def __init__(self, state_size, action_size):
@@ -21,12 +18,12 @@ class DQNNetwork(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+    # 가중치 초기화 (선택 사항)
     # def initialize_weights(self):
     #     for m in self.model:
     #         if isinstance(m, nn.Linear):
     #             init.kaiming_uniform_(m.weight, nonlinearity='relu')
     #             init.uniform_(m.bias, -0.1, 0.1)
-
 
 class AdvancedDQNNetwork(nn.Module):
     def __init__(self, state_size, action_size):

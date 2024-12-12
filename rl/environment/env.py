@@ -78,7 +78,7 @@ class StreamingEnvironment:
         """Compute normalization parameters for latency and variance."""
         self.latency_values = self.get_all_latency_values()
         self.min_latency = np.min(self.latency_values)
-        self.max_latency = np.percentile(self.latency_values, 99)  # 95th percentile
+        self.max_latency = np.percentile(self.latency_values, 99)  # 99th percentile
         self.min_datasize = self.config['min_datasize']
         self.max_datasize = self.config['max_datasize']
 
@@ -131,6 +131,19 @@ class StreamingEnvironment:
         self.decoder.reset()
         self.initialize_state_variables()
         self.current_episode += 1
+
+        """
+        Decoder에 처음에 P-frame을 넣으면 에러가 발생하기 때문에, 에피소드 맨 처음에는 I-frame을 인코딩 및 디코딩 해줌
+        """
+        # 첫 번째 프레임을 I-frame으로 인코딩 및 디코딩하여 디코더에 참조 프레임 설정
+        seq_num, frame_path = self.get_current_frame_path()
+        is_i_frame = True  # 첫 번째 프레임은 강제로 I-frame으로 설정
+        encoded_data = self.encoder.encode_frame(frame_path, is_i_frame)
+        decoded_frame = self.decoder.decode_frame(encoded_data, len(encoded_data), 640, 480)
+
+        # 현재 스텝을 1로 설정하여 다음 프레임부터 에이전트의 액션을 적용
+        self.current_step = 1
+
         return self.get_initial_state()
 
     def get_initial_state(self):
@@ -163,7 +176,7 @@ class StreamingEnvironment:
         # print(f'\n\n{len(self.kt_packet_loss_history)}\n \
         #       {self.lg_packet_loss_history}\n')
         # Return state, reward, done, info
-        info = {'seq_num': seq_num, 'ssim': self.last_ssim_value, 'datasize': self.last_datasize}
+        info = {'seq_num': seq_num, 'ssim': self.last_ssim_value, 'datasize': self.last_datasize, 'frame_loss': frame_received}
         return self.state, reward, self.done, info
 
     def map_action(self, action):

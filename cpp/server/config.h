@@ -5,7 +5,7 @@
 
 #include <string>
 
-const char* SERVER_IP = "222.111.144.61";
+const char* SERVER_IP = "121.128.220.205";
 
 const int SERVER_PORT1 = 12345; //lg
 const int SERVER_PORT2 = 12346; //kt

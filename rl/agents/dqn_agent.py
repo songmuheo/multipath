@@ -1,15 +1,13 @@
-# agents/agent.py
+# DQNAgent 클래스
 import random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from train.model import DQNNetwork
-from train.model import AdvancedDQNNetwork
-from utils.config import load_config
+from models.dqn_models import DQNNetwork
+from models.dqn_models import AdvancedDQNNetwork
 from collections import deque
 from agents.base_agent import BaseAgent
-
 
 class DQNAgent(BaseAgent):
     def __init__(self, state_size, action_size, config):
@@ -18,7 +16,7 @@ class DQNAgent(BaseAgent):
         self.config = config
         self.state_size = state_size
         self.action_size = action_size
-        self.network = config['network']
+        self.network = config['network_dqn']
 
         # 하이퍼파라미터 로드
         self.gamma = self.config['gamma']
@@ -26,14 +24,13 @@ class DQNAgent(BaseAgent):
         self.epsilon_min = self.config['epsilon_min']
         self.epsilon_decay = self.config['epsilon_decay']
         self.learning_rate = self.config['learning_rate']
-        self.batch_size = self.config['batch_size']
+        self.batch_size = self.config['batch_size_dqn']
         self.memory_size = self.config['memory_size']
         self.memory = deque(maxlen=self.memory_size)
         
         # 모델 정의
         self.model = self.build_model()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        # self.criterion = nn.MSELoss()
         self.criterion = nn.SmoothL1Loss()
 
         self.target_model = self.build_model()
@@ -43,6 +40,9 @@ class DQNAgent(BaseAgent):
         self.target_model.to(self.device)
 
         self.is_eval_mode = False
+
+        # 일정량의 경험이 쌓일 때까지 학습을 시작하지 않음
+        self.replay_start_size = self.config.get('replay_start_size', self.batch_size)
 
     def build_model(self):
         if self.network == 'DQNNetwork':
@@ -62,36 +62,35 @@ class DQNAgent(BaseAgent):
             self.epsilon = max(self.epsilon_min, self.epsilon)
             
     def select_action(self, state):
-        # eval mode 이거나, 탐색을 하지 않는 경우
+        # 평가 모드이거나 탐색을 하지 않는 경우
         if self.is_eval_mode or np.random.rand() > self.epsilon:
             # 최대 Q 값을 가진 행동 선택
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             self.model.eval()
             with torch.no_grad():
                 act_values = self.model(state_tensor)
-            if not self.is_eval_mode:
-                self.model.train()
             action = torch.argmax(act_values).item()
             max_q_value = torch.max(act_values).item()
+            if not self.is_eval_mode:
+                self.model.train()
             return action, max_q_value
         # 무작위 탐색
         else:
             # 무작위 행동 선택 (탐색)
             return random.randrange(self.action_size), None
 
-
     def replay(self):
-        # eval mode에서는 학습하지 않음
+        # 평가 모드에서는 학습하지 않음
         if self.is_eval_mode:
-            return
-        if len(self.memory) < self.batch_size:
-            return
+            return None
+        if len(self.memory) < self.replay_start_size:
+            return None
         minibatch = random.sample(self.memory, self.batch_size)
         states = torch.FloatTensor([m[0] for m in minibatch]).to(self.device)
         actions = torch.LongTensor([m[1] for m in minibatch]).unsqueeze(1).to(self.device)
         rewards = torch.FloatTensor([m[2] for m in minibatch]).to(self.device)
         next_states = torch.FloatTensor([m[3] for m in minibatch]).to(self.device)
-        dones = torch.FloatTensor([m[4] for m in minibatch]).to(self.device)
+        dones = torch.FloatTensor([float(m[4]) for m in minibatch]).to(self.device)
 
         # 현재 상태의 Q값
         q_values = self.model(states).gather(1, actions).squeeze()
@@ -118,7 +117,6 @@ class DQNAgent(BaseAgent):
         self.is_eval_mode = False
         print("Agent set to training mode.")
 
-    
     def set_eval_mode(self):
         """평가 모드로 설정합니다."""
         self.model.eval()

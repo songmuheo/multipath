@@ -119,7 +119,24 @@ py::array_t<uint8_t> Decoder::decode_frame(const py::bytes& encoded_data_py, int
 }
 
 void Decoder::reset() {
-    avcodec_flush_buffers(codec_ctx);
+    if (codec_ctx) {
+        avcodec_free_context(&codec_ctx);
+        codec_ctx = nullptr;
+    }
+    if (frame) {
+        av_frame_free(&frame);
+        frame = nullptr;
+    }
+    if (pkt) {
+        av_packet_free(&pkt);
+        pkt = nullptr;
+    }
+    if (sws_ctx) {
+        sws_freeContext(sws_ctx);
+        sws_ctx = nullptr;
+    }
+    // 다시 초기화
+    init_decoder();
 }
 
 void Decoder::close() {
