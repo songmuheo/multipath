@@ -4,10 +4,10 @@ LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=$(pwd)/build/codec_m
 - config에 해당하는 폴더 명 등 위치해 있음
 
 evaluation/evaluation_rl.ipynb
-- 학습 결과 분석
-- 분석 결과는 rl/evaluation/output/{연월일}/ 폴더에 저장
-- 이는 해당 모델에 대한 분석 결과임
-- 결과 폴더 수정 해야함
+- 해당하는 학습 결과 분석
+- 분석 결과는 /home/songmu/multipath/rl/results/{연월일}/logs/output' 폴더에 저장
+- 분석할 학습 결과 폴더 지정해 줘야함
+    - folder = {folder path}
 
 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=$(pwd)/build/codec_module python3 get_ssim.py
 - 전체를 i-frame으로 인코딩 및 디코딩 했을 때 frames의 ssim을 계산
