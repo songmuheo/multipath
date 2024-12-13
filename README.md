@@ -1,5 +1,5 @@
-#### Client
-'''
+## client/
+```
 /~/multipath/client
 mkdir build
 cd build
@@ -20,7 +20,7 @@ interface 2
 저장은 client/logs/{연월일}/ 폴더에 저장
 해당 폴더에 송신한 frames, log 저장
 
-#### Server
+## server/
 ```
 /~/multipath/server
 mkdir build
@@ -34,3 +34,7 @@ Client가 송신한 frames 받아서 저장
 저장은 server/logs/{연월일}/ 에 저장
 수신한 bin files 저장은 현재 하지 않음
 각 path (kt, lg)관련해서 따로 저장
+
+## rl/
+
+강화학습
