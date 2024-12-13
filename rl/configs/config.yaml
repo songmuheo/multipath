@@ -4,55 +4,55 @@
 mode: train  # 'train' 또는 'eval'
 algorithm: 'PPO'  # 'DQN' or 'PPO' 'RDQN'
 
-# train 모드 설정
-num_episodes: 2000
+# train 모드
+num_episodes: 500
 model_save_freq: 10
-training_data_split: 0.75  # training 데이터셋 비율
+training_data_split: 0.5  # training 데이터셋 비율
 log_save_freq: 10  # 몇 에피소드마다 로그를 저장할지
-history_length: 60  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
+history_length: 50  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
 load_model_path:  # start initial state
 # "/home/songmu/Multipath/rl/data/results/2024_11_28_14_50/models/ppo_model_episode400.pth"
 
-# evaluate 모드 설정
+# evaluate 모드
 num_eval_episodes: 1
-model_path: /home/songmu/multipath/rl/results/lab/2024_12_04_14_50/models/ppo_model_episode500.pth
+model_path: /home/songmu/multipath/rl/results/2024_12_10_17_42/models/ppo_model_episode100.pth
 
 # 환경 설정
 # frame_dir: data/frames/frames_og/
-frame_dir: /home/songmu/multipath/cpp/results/client/2024_12_10_17_00/frames_with_sequence
+frame_dir: /home/songmu/multipath/client/logs/2024_12_09_16_07/frames_with_sequence
 # kt_log_dir: 'data/env_logs/kt_log.csv'
-kt_log_dir: /home/songmu/multipath/cpp/results/server/2024_12_10_16_45/logs/kt_log.csv
+kt_log_dir: /home/songmu/multipath/server/logs/2024_12_09_16_02/kt_log.csv
 # lg_log_dir: 'data/env_logs/lg_log.csv'
-lg_log_dir: /home/songmu/multipath/cpp/results/server/2024_12_10_16_45/logs/lg_log.csv
-latency_threshold: 40  # ms
+lg_log_dir: /home/songmu/multipath/server/logs/2024_12_09_16_02/lg_log.csv
+latency_threshold: 35  # ms
 ssim_threshold: 0.9
 gamma_reward: 0.1
 state_num: 13
 
 # Normalize 설정
 min_datasize: 400
-max_datasize: 50000
+max_datasize: 60000
 max_frames_since_loss: 10
-max_frames_since_iframe: 20
+max_frames_since_iframe: 50
 
 # 에이전트 하이퍼파라미터
 learning_rate: 0.001
 
 # PPO
-batch_size_ppo: 8192
-update_timestep: 8192
-mini_batch_size: 512
+batch_size_ppo: 4096
+update_timestep: 4096
+mini_batch_size: 256
 epsilon_clip: 0.2
-k_epochs: 10
+k_epochs: 7
 entropy_coef: 0.01
 value_loss_coef: 0.5
-lambda_gae: 0.95  # GAE 람다
-gamma: 0.99
+lambda_gae: 0.96  # GAE 람다
+gamma: 0.98
 network_ppo: 'ActorCritic2'
 scheduler_type: LinearLR  # CosineAnnealingLR or LinearLR
 scheduler_T_max: 31721             # CosineAnnealingLR에 필요한 매개변수 (T_max)
 start_factor: 1.0 # LinearLR
-end_factor: 0.07  # LinearLR
+end_factor: 0.1  # LinearLR
 total_iters: 100  # LinearLR
 
 

@@ -7,14 +7,14 @@ import cv2
 import matplotlib.pyplot as plt
 
 class PerformanceEvaluator:
-    def __init__(self, frames_dir, env_logs_dir, latency_threshold=40):
+    def __init__(self, frames_dir, env_logs_dir, latency_threshold, training_data_split):
         self.frames_dir = frames_dir
         self.env_logs_dir = env_logs_dir
         self.latency_threshold = latency_threshold
         self.sequence_numbers = []
         self.seq_num_to_frame_path = {}
         self.get_sequence_numbers()
-        self.adjust_sequence_numbers()
+        self.adjust_sequence_numbers(training_data_split)
         self.methods = ['kt', 'lg', 'combine']
         self.gops = [1, 10, 30]
 
@@ -28,10 +28,10 @@ class PerformanceEvaluator:
         self.sequence_numbers = sorted(seq_num_to_frame_path.keys())
         self.seq_num_to_frame_path = seq_num_to_frame_path
 
-    def adjust_sequence_numbers(self):
+    def adjust_sequence_numbers(self, training_data_split):
         """Adjust sequence numbers to use the last 20%."""
         total_sequences = len(self.sequence_numbers)
-        split_index = int(total_sequences * 0.8)
+        split_index = int(total_sequences * training_data_split)
         self.sequence_numbers = self.sequence_numbers[split_index:]
 
     def load_env_log(self, method):
@@ -79,12 +79,7 @@ class PerformanceEvaluator:
                 # 실제 평가할 sequence_numbers 기준으로 loop
                 for idx, seq_num in enumerate(self.sequence_numbers):
                     frame_path = self.seq_num_to_frame_path.get(seq_num)
-                    if frame_path is None:
-                        # 프레임 파일 자체가 없는 경우도 loss로 간주
-                        ssim_scores.append(0)
-                        datasize_list.append(0)
-                        continue
-
+                    
                     is_i_frame = is_i_frame_list[idx]
                     encoded_data = encoder.encode_frame(frame_path, is_i_frame)
                     data_size = len(encoded_data)
@@ -97,7 +92,6 @@ class PerformanceEvaluator:
                         # Packet loss (네트워크 지연 초과 혹은 수신하지 않은 경우)
                         ssim_scores.append(0)
                         continue
-
                     try:
                         decoded_frame = decoder.decode_frame(encoded_data, len(encoded_data), 640, 480)
                         if decoded_frame is None:
@@ -124,10 +118,10 @@ class PerformanceEvaluator:
 
         # Save results to CSV
         results_df = pd.DataFrame(results)
-        results_df.to_csv("evaluation_results.csv", index=False)
+        results_df.to_csv(f"{env_logs_dir}/evaluation_results.csv", index=False)
         print("Results saved to evaluation_results.csv")
 
-        self.plot_results(results)
+        self.plot_results(results, env_logs_dir)
 
 
     def get_is_i_frame_list(self, gop_size, total_frames):
@@ -135,7 +129,7 @@ class PerformanceEvaluator:
         is_i_frame_list = [(i % gop_size == 0) for i in range(total_frames)]
         return is_i_frame_list
 
-    def plot_results(self, results):
+    def plot_results(self, results, path):
         """Plot results."""
         results_df = pd.DataFrame(results)
 
@@ -146,7 +140,7 @@ class PerformanceEvaluator:
         plt.title("PRR by Method")
         plt.xlabel("Method")
         plt.ylabel("PRR")
-        plt.savefig("prr_results.png")
+        plt.savefig(f"{env_logs_dir}/prr_results.png")
         print("PRR plot saved as prr_results.png")
 
         # SSIM and Data Size Plots by GoP
@@ -159,7 +153,7 @@ class PerformanceEvaluator:
             plt.title(f"SSIM by Method (GoP={gop})")
             plt.xlabel("Method")
             plt.ylabel("Average SSIM")
-            plt.savefig(f"ssim_results_gop_{gop}.png")
+            plt.savefig(f"{env_logs_dir}/ssim_results_gop_{gop}.png")
             print(f"SSIM plot saved as ssim_results_gop_{gop}.png")
 
             # Data Size Plot
@@ -168,12 +162,14 @@ class PerformanceEvaluator:
             plt.title(f"Data Size by Method (GoP={gop})")
             plt.xlabel("Method")
             plt.ylabel("Average Data Size (bytes)")
-            plt.savefig(f"datasize_results_gop_{gop}.png")
+            plt.savefig(f"{env_logs_dir}/datasize_results_gop_{gop}.png")
             print(f"Data Size plot saved as datasize_results_gop_{gop}.png")
 
 
 if __name__ == "__main__":
     frames_dir = "/home/songmu/multipath/client/logs/2024_12_09_16_07/frames_with_sequence"
     env_logs_dir = "/home/songmu/multipath/server/logs/2024_12_09_16_02"
-    evaluator = PerformanceEvaluator(frames_dir, env_logs_dir)
+    latency_threshold = 35
+    training_data_split = 0.50
+    evaluator = PerformanceEvaluator(frames_dir, env_logs_dir, latency_threshold, training_data_split)
     evaluator.evaluate()

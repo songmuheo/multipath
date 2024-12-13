@@ -7,9 +7,9 @@ from utils.logger import Logger
 
 def evaluate(agent, env, config, results_dir):
 
-    ssim_max = '/home/songmu/multipath/rl/env_logs/frame_analysis_log.csv'
-    ssim_max_df = pd.read_csv(ssim_max)
-    ssim_max_df_dict = dict(zip(ssim_max_df['Sequence Number'], ssim_max_df['SSIM']))
+    # ssim_max = '/home/songmu/multipath/rl/env_logs/frame_analysis_log.csv'
+    # ssim_max_df = pd.read_csv(ssim_max)
+    # ssim_max_df_dict = dict(zip(ssim_max_df['Sequence Number'], ssim_max_df['SSIM']))
 
     # 모델 로드
     agent.load_model(config['model_path'])
@@ -38,8 +38,8 @@ def evaluate(agent, env, config, results_dir):
                 step += 1
 
                 # ssim normalize
-                max_ssim = ssim_max_df_dict[info['seq_num']]
-                normalized_ssim = info['ssim'] / max_ssim
+                # max_ssim = ssim_max_df_dict[info['seq_num']]
+                # normalized_ssim = info['ssim'] / max_ssim
 
                 # i-frame 선택 혹은 p-frame 선택 로깅
                 if action % 2 == 0:
@@ -59,9 +59,9 @@ def evaluate(agent, env, config, results_dir):
                     'Step': step,
                     'Frame Number': info['seq_num'],
                     'Action': action,
-                    'Max SSIM': max_ssim,
+                    # 'Max SSIM': max_ssim,
                     'SSIM': info['ssim'],
-                    'Normalized SSIM' : normalized_ssim,
+                    # 'Normalized SSIM' : normalized_ssim,
                     'Data Size': info['datasize'],
                     'Frame loss': info['frame_loss'],
                     'Reward': reward,
