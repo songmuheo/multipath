@@ -3,7 +3,7 @@
 - 관련 logging, model 저장은 rl/results/연월일/ 폴더에 저장
 - config에 해당하는 폴더 명 등 위치해 있음
 
-evaluation/evaluation_rl.ipynb
+#### evaluation/evaluation_rl.ipynb
 - 해당하는 학습 결과 분석
 - 분석 결과는 /home/songmu/multipath/rl/results/{연월일}/logs/output' 폴더에 저장
 - 분석할 학습 결과 폴더 지정해 줘야함
