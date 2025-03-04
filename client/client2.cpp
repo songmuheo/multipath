@@ -80,8 +80,7 @@ public:
             "sliced-threads=0:"
             "aq-mode=1:"
             "trellis=0:"
-            "psy-rd=1.0:;
-            // "psy-rdoq=1.0";
+            "psy-rd=1.0:1.0;
 
         av_dict_set(&opt, "x264-params", x264_params.c_str(), 0);
 
