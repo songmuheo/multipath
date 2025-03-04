@@ -26,8 +26,8 @@ const std::string SAVE_FILEPATH = BASE_FILEPATH + "multipath/cpp/client/logs";
 // const char* INTERFACE2_NAME = "wlx588694fd23d6";
 
 // LGU+
-const char* INTERFACE1_IP = "192.168.10.100";
-const char* INTERFACE1_NAME = "enx588694f65060";
+const char* INTERFACE1_IP = "192.168.10.101";
+const char* INTERFACE1_NAME = "enx588694fda665";
 // KT
 const char* INTERFACE2_IP = "192.168.1.16";
 const char* INTERFACE2_NAME = "enx588694f64878";
