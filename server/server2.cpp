@@ -1,3 +1,4 @@
+// main.cpp
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -35,60 +36,21 @@ std::string create_timestamped_directory(const std::string& base_dir) {
 
 void create_log_file(const char* logpath) {
     std::ofstream logfile(logpath, std::ios::app);
-    // 헤더에 frame_type 컬럼 추가
-    logfile << "source_ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size,frame_type\n";
+    logfile << "source_ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size\n";
     logfile.close();
+
 }
-
-// H.264 프레임 타입을 단순히 판별하는 함수
-// - nal_unit_type == 5 : IDR -> I-frame
-// - nal_unit_type == 1 : Non-IDR -> P-frame (실제로는 B, P 등이 있지만 여기서는 단순화)
-// - 그 외 -> OTHER
-std::string get_h264_frame_type(const uint8_t* data, size_t size) {
-    if (size < 5) {
-        return "UNKNOWN";
-    }
-
-    for (size_t i = 0; i < size - 4; i++) {
-        if (data[i] == 0x00 && data[i + 1] == 0x00) {
-            if (data[i + 2] == 0x01) {  // 3-byte Start Code (I-frame)
-                if ((data[i + 3] & 0x1F) == 5) return "I";
-            } 
-            else if (data[i + 2] == 0x00 && data[i + 3] == 0x01) {  // 4-byte Start Code (P-frame)
-                if ((data[i + 4] & 0x1F) == 1) return "P";
-            }
-        }
-    }
-
-    return "OTHER";
-}
-
-
 
 // 패킷 정보를 CSV 파일에 기록하는 함수
-// frame_type을 새로 추가
-void log_packet_info(const char* logpath,
-                     const std::string& source_ip,
-                     uint32_t sequence_number,
-                     uint64_t timestamp_frame,
-                     uint64_t timestamp_sending,
-                     uint64_t received_time_us,
-                     uint64_t network_latency_us,
-                     size_t message_size,
-                     const std::string& frame_type)
+void log_packet_info(const char* logpath, const std::string& source_ip, uint32_t sequence_number, uint64_t timestamp_frame, uint64_t timestamp_sending, 
+                uint64_t received_time_us, uint64_t network_latency_us, size_t message_size) 
 {
     std::ofstream logfile(logpath, std::ios::app);
-    logfile << source_ip << ","
-            << sequence_number << ","
-            << timestamp_frame << ","
-            << timestamp_sending << ","
-            << received_time_us << ","
-            << (network_latency_us / 1000.0) << ","
-            << message_size << ","
-            << frame_type
-            << "\n";
+    logfile << source_ip << "," << sequence_number << "," << timestamp_frame << "," << timestamp_sending << "," <<
+    received_time_us << "," << (network_latency_us / 1000.0) << "," << message_size << "\n"; // latency를 ms로 변환하여 기록
     logfile.close();
 }
+
 
 // 소켓 설정 및 데이터 수신
 void receive_packets(int port, const char* log_filepath) {
@@ -121,6 +83,7 @@ void receive_packets(int port, const char* log_filepath) {
     std::cout << "Listening on port " << port << std::endl;
 
     create_log_file(log_filepath);
+    std::ofstream logfile(log_filepath, std::ios::app);
 
     while (true) {
         ssize_t len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
@@ -137,39 +100,18 @@ void receive_packets(int port, const char* log_filepath) {
         char client_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
 
-        // 사용자 정의 헤더 파싱 (PacketHeader의 크기는 20바이트)
+        // 사용자 정의 헤더 파싱
         PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
 
         // 패킷 도착 지연 시간 계산 (마이크로초 단위)
         uint64_t network_latency_us = received_time_us - header->timestamp_sending;
 
-        // PacketHeader 바로 뒤부터 H.264 데이터가 시작된다고 가정
-        // (주의: 실제로는 파편화 등 다양한 변수가 있을 수 있음)
-        size_t header_size = sizeof(PacketHeader); // 20 bytes
-        if (len > header_size) {
-            const uint8_t* h264_data = reinterpret_cast<const uint8_t*>(buffer + header_size);
-            size_t h264_size = len - header_size;
+        // 패킷 정보 로그 파일에 기록
+        log_packet_info(log_filepath, client_ip, header->sequence_number, header->timestamp_frame, header->timestamp_sending, received_time_us, network_latency_us, len);
 
-            // H.264 프레임 타입 판별
-            std::string frame_type = get_h264_frame_type(h264_data, h264_size);
-
-            // 패킷 정보 로그 파일에 기록
-            log_packet_info(log_filepath,
-                            client_ip,
-                            header->sequence_number,
-                            header->timestamp_frame,
-                            header->timestamp_sending,
-                            received_time_us,
-                            network_latency_us,
-                            len,
-                            frame_type);
-        }
-        else {
-            // 헤더보다 패킷 전체 길이가 작으면 에러 로그만 찍고 넘어감
-            std::cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
-        }
     }
 
+    logfile.close();
     close(sockfd);
 }
 
