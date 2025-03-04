@@ -44,6 +44,81 @@ class ActorCritic2(nn.Module):
         state_values = self.value_head(x)
         return action_probs, state_values
 
+class ActorCritic3(nn.Module):
+    def __init__(self, state_size, action_size, hidden_size=256):
+        super(ActorCritic3, self).__init__()
+        self.fc1 = nn.Linear(state_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.residual_fc = nn.Linear(hidden_size, hidden_size)
+        self.action_head = nn.Linear(hidden_size, action_size)
+        self.value_head = nn.Linear(hidden_size, 1)
+        self.dropout = nn.Dropout(p=0.2)
+        self.bn1 = nn.BatchNorm1d(hidden_size)
+        self.bn2 = nn.BatchNorm1d(hidden_size)
+        
+        # Weight Initialization
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='relu')
+        nn.init.kaiming_normal_(self.residual_fc.weight, nonlinearity='relu')
+        nn.init.xavier_uniform_(self.action_head.weight)
+        nn.init.xavier_uniform_(self.value_head.weight)
+
+    def forward(self, x):
+        if self.training and x.size(0) > 1:  # BatchNorm 사용 조건
+            x1 = self.dropout(F.relu(self.bn1(self.fc1(x))))
+            x2 = self.dropout(F.relu(self.bn2(self.fc2(x1))))
+        else:  # BatchNorm 생략
+            x1 = self.dropout(F.relu(self.fc1(x)))
+            x2 = self.dropout(F.relu(self.fc2(x1)))
+        
+        # Residual Connection
+        res = F.relu(self.residual_fc(x2))
+        x = x2 + res
+        
+        # Output Layers
+        action_probs = F.softmax(self.action_head(x), dim=-1)
+        state_values = self.value_head(x)
+        return action_probs, state_values
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ActorCritic4(nn.Module):
+    def __init__(self, state_size, action_size, hidden_size=256):
+        super(ActorCritic4, self).__init__()
+        
+        # Layer 1
+        self.fc1 = nn.Linear(state_size, hidden_size)
+        # Layer 2
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        # Layer 3
+        self.fc3 = nn.Linear(hidden_size, hidden_size)
+        # Residual Layer
+        self.residual_fc = nn.Linear(hidden_size, hidden_size)
+        
+        # Action and Value Heads
+        self.action_head = nn.Linear(hidden_size, action_size)
+        self.value_head = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        # First Layer
+        x = F.relu(self.fc1(x))
+        # Second Layer
+        x = F.relu(self.fc2(x))
+        # Third Layer
+        x = F.relu(self.fc3(x))
+        
+        # Residual Connection
+        res = F.relu(self.residual_fc(x))
+        x = x + res  # Add residual connection
+        
+        # Output heads
+        action_probs = F.softmax(self.action_head(x), dim=-1)
+        state_values = self.value_head(x)
+        return action_probs, state_values
+
+
 
 class ActorCritic_batchnorm(nn.Module):
     def __init__(self, state_size, action_size, hidden_size=256):

@@ -41,8 +41,9 @@ public:
         // Open the CSV log file
         open_log_file();
 
-        codec = avcodec_find_encoder_by_name("libx264");
-        if (!codec) throw runtime_error("Codec not found");
+        // 하드웨어 인코딩 (NVENC) 사용: "h264_nvenc" 인코더 선택
+        codec = avcodec_find_encoder_by_name("h264_nvenc");
+        if (!codec) throw runtime_error("NVENC Codec not found");
 
         codec_ctx.reset(avcodec_alloc_context3(codec));
         if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
@@ -51,72 +52,30 @@ public:
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = {1, FPS};
         codec_ctx->framerate = {FPS, 1};
-        codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+
+        // NVENC는 주로 NV12 픽셀 포맷을 사용합니다.
+        codec_ctx->pix_fmt = AV_PIX_FMT_NV12;
         codec_ctx->max_b_frames = 0;
         codec_ctx->thread_type = FF_THREAD_SLICE;
         codec_ctx->thread_count = 1;
-        // codec_ctx->gop_size = 12; // I-프레임 간격 설정
+        // codec_ctx->gop_size = 30; // 키프레임 간격 (필요에 따라 설정)
 
         AVDictionary* opt = nullptr;
-        
-        // Preset and tune settings for low latency
-        av_dict_set(&opt, "preset", "veryfast", 0);    // Use "superfast" if you want better compression
+        // NVENC 전용 인코딩 옵션 (저지연/zerolatency 설정)
+        av_dict_set(&opt, "preset", "ll", 0);         // "ll"은 Low-Latency 모드 (환경에 따라 "llhq" 등도 가능)
         av_dict_set(&opt, "tune", "zerolatency", 0);
-
-        // Disable B-frames explicitly
         av_dict_set(&opt, "bframes", "0", 0);
+        av_dict_set(&opt, "cq", "21", 0);               // 일정 품질 유지 (CRF 대신 CQ 사용)
+        av_dict_set(&opt, "keyint", "30", 0);           // 키프레임 간격 설정
+        av_dict_set(&opt, "min-keyint", "30", 0);       // 고정 키프레임 간격
 
-        // Rate control settings
-        av_dict_set(&opt, "crf", "21", 0);                 // Adjust CRF value as needed (lower = better quality)
-        av_dict_set(&opt, "rc-lookahead", "0", 0);         // Disable look-ahead
-        av_dict_set(&opt, "scenecut", "0", 0);             // Disable scene cut detection
+        // 기존 libx264 전용 옵션들은 제거하거나 주석 처리합니다.
+        // ex) av_dict_set(&opt, "crf", "21", 0);  // 사용 안함
 
-        // Keyframe interval settings
-        av_dict_set(&opt, "keyint", "30", 0);              // Set to frame rate
-        av_dict_set(&opt, "min-keyint", "30", 0);          // Force constant keyframe interval
-
-        // Additional settings for latency and quality
-        av_dict_set(&opt, "refs", "2", 0);                 // Use 3 reference frame
-        av_dict_set(&opt, "no-sliced-threads", "1", 0);    // Disable sliced threads for better latency
-        av_dict_set(&opt, "aq-mode", "1", 0);              // Disable adaptive quantization
-        av_dict_set(&opt, "trellis", "0", 0);              // Disable trellis optimization
-
-        av_dict_set(&opt, "psy-rd", "1.0", 0);
-        av_dict_set(&opt, "psy-rdoq", "1.0", 0);
-
-        // Preset and tune settings for low latency
-        // av_dict_set(&opt, "preset", "veryfast", 0);    // Use "superfast" if you want better compression
-        // av_dict_set(&opt, "tune", "zerolatency", 0);
-
-        // // Disable B-frames explicitly
-        // av_dict_set(&opt, "bframes", "0", 0);
-
-        // // Rate control settings
-        // av_dict_set(&opt, "crf", "21", 0);                 // Adjust CRF value as needed (lower = better quality)
-        // av_dict_set(&opt, "rc-lookahead", "0", 0);         // Disable look-ahead
-        // av_dict_set(&opt, "scenecut", "0", 0);             // Disable scene cut detection
-
-        // // Keyframe interval settings
-        // av_dict_set(&opt, "keyint", "30", 0);              // Set to frame rate
-        // av_dict_set(&opt, "min-keyint", "30", 0);          // Force constant keyframe interval
-
-        // // Additional settings for latency and quality
-        // av_dict_set(&opt, "refs", "1", 0);                 // Use 3 reference frame
-        // av_dict_set(&opt, "no-sliced-threads", "1", 0);    // Disable sliced threads for better latency
-        // av_dict_set(&opt, "aq-mode", "1", 0);              // Disable adaptive quantization
-        // av_dict_set(&opt, "trellis", "0", 0);              // Disable trellis optimization
-
-        // av_dict_set(&opt, "psy-rd", "1.0", 0);
-        // av_dict_set(&opt, "psy-rdoq", "1.0", 0);
-
-        // 코덱 열기
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
-            throw runtime_error("Could not open codec");
+            throw runtime_error("Could not open NVENC codec");
         }
-
-        // 딕셔너리 해제
         av_dict_free(&opt);
-
 
         frame.reset(av_frame_alloc());
         if (!frame) throw runtime_error("Could not allocate video frame");
@@ -138,7 +97,10 @@ public:
         servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
         servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
 
-        sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422, WIDTH, HEIGHT, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+        // sws 컨텍스트도 출력 포맷을 NV12로 변경
+        sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422,
+                                 WIDTH, HEIGHT, AV_PIX_FMT_NV12,
+                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
     }
 

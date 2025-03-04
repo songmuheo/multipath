@@ -15,7 +15,8 @@ class PerformanceEvaluator:
         self.seq_num_to_frame_path = {}
         self.get_sequence_numbers()
         self.adjust_sequence_numbers(training_data_split)
-        self.methods = ['kt', 'lg', 'combine']
+        # self.methods = ['kt', 'lg', 'combine']
+        self.methods = ['combine', 'kt', 'lg']
         self.gops = [1, 10, 30]
 
     def get_sequence_numbers(self):
@@ -29,7 +30,7 @@ class PerformanceEvaluator:
         self.seq_num_to_frame_path = seq_num_to_frame_path
 
     def adjust_sequence_numbers(self, training_data_split):
-        """Adjust sequence numbers to use the last 20%."""
+        """Adjust sequence numbers to use the last (1 - training_data_split) portion."""
         total_sequences = len(self.sequence_numbers)
         split_index = int(total_sequences * training_data_split)
         self.sequence_numbers = self.sequence_numbers[split_index:]
@@ -46,6 +47,33 @@ class PerformanceEvaluator:
         total_packets = len(latency_series)
         received_packets = (latency_series <= self.latency_threshold).sum()
         return received_packets / total_packets
+    def get_frame_type(self, encoded_data):
+        """
+        H.264 NAL Unit을 분석하여 프레임 타입을 반환
+        """
+        if len(encoded_data) < 5:
+            return "Unknown"
+
+        # NAL Unit 헤더는 보통 0x00 00 00 01 또는 0x00 00 01 로 시작함
+        nal_start_index = encoded_data.find(b'\x00\x00\x00\x01')
+        if nal_start_index == -1:
+            nal_start_index = encoded_data.find(b'\x00\x00\x01')
+            if nal_start_index == -1:
+                return "Unknown"  # NAL Unit을 찾을 수 없는 경우
+
+        # NAL Unit의 첫 번째 바이트 분석 (H.264: NAL type 5 -> I-frame, 1 -> P-frame)
+        nal_unit = encoded_data[nal_start_index + 4]  # NAL Unit 헤더 다음 바이트
+        nal_type = nal_unit & 0x1F  # Lower 5 bits
+
+        if nal_type == 5:
+            return "I-frame"
+        elif nal_type == 1:
+            return "P-frame"
+        elif nal_type in [2, 3, 4]:
+            return "B-frame"
+        else:
+            return f"Unknown (NAL type {nal_type})"
+
 
     def evaluate(self):
         """Evaluate performance."""
@@ -56,10 +84,9 @@ class PerformanceEvaluator:
             latency_df = self.load_env_log(method)
 
             # self.sequence_numbers를 인덱스로 가지도록 latency_df 재정렬
-            # 로그에 없는 sequence_number는 NaN으로 처리
             latency_series = latency_df.reindex(self.sequence_numbers)['network_latency_ms']
 
-            # 수신하지 않은 (로그에 없는) 프레임을 loss로 처리하기 위해 NaN 값을 임계치보다 큰 값으로 채움
+            # 로그에 없는 (NaN) 값을 임계치보다 큰 값으로 채워서 수신되지 않은 것으로 처리
             latency_series = latency_series.fillna(self.latency_threshold + 1)
 
             prr = self.compute_prr(latency_series)
@@ -74,55 +101,135 @@ class PerformanceEvaluator:
 
                 ssim_scores = []
                 datasize_list = []
+
+                # 추가: raw data 저장을 위한 딕셔너리
+                raw_data = {
+                    'sequence_number': [],
+                    'network_latency_ms': [],
+                    'ssim': [],
+                    'datasize': [],
+                    'frame type': []
+                }
+
                 is_i_frame_list = self.get_is_i_frame_list(gop, len(self.sequence_numbers))
 
-                # 실제 평가할 sequence_numbers 기준으로 loop
                 for idx, seq_num in enumerate(self.sequence_numbers):
                     frame_path = self.seq_num_to_frame_path.get(seq_num)
-                    
                     is_i_frame = is_i_frame_list[idx]
+                    # 인코딩
                     encoded_data = encoder.encode_frame(frame_path, is_i_frame)
+                    frame_type_str = self.get_frame_type(encoded_data)  # 프레임 타입 직접 분석
+
+                    # frame_type_str = "I-frame" if is_i_frame else "P-frame"  # **추가**
+
                     data_size = len(encoded_data)
                     if method == 'combine':
-                        data_size *= 2  # Double data size for 'combine'
+                        data_size *= 2
                     datasize_list.append(data_size)
 
+                    # 네트워크 레이턴시 확인
                     network_latency = latency_series.loc[seq_num]
-                    if network_latency > self.latency_threshold:
-                        # Packet loss (네트워크 지연 초과 혹은 수신하지 않은 경우)
+
+                    # **frame loss 확인 (csv에 sequence_number 존재 여부 체크)**
+                    if pd.isna(network_latency):
+                        print(f"Frame loss detected at sequence {seq_num}")
                         ssim_scores.append(0)
+                        raw_data['sequence_number'].append(seq_num)
+                        raw_data['network_latency_ms'].append(float('nan'))  # NaN으로 기록
+                        raw_data['ssim'].append(0)
+                        raw_data['datasize'].append(data_size)
+                        raw_data['frame type'].append(frame_type_str)
                         continue
+
+                    # packet loss 판정 (latency 임계값 초과)
+                    if network_latency > self.latency_threshold:
+                        ssim_scores.append(0)
+                        raw_data['sequence_number'].append(seq_num)
+                        raw_data['network_latency_ms'].append(network_latency)
+                        raw_data['ssim'].append(0)
+                        raw_data['datasize'].append(data_size)
+                        raw_data['frame type'].append(frame_type_str)
+                        continue
+                    
+                    # 디코딩 & SSIM 계산
                     try:
                         decoded_frame = decoder.decode_frame(encoded_data, len(encoded_data), 640, 480)
                         if decoded_frame is None:
+                            # print(f"[Warning] Decoded frame is None at sequence {seq_num} ({frame_type_str})")
                             ssim_scores.append(0)
+                            raw_data['sequence_number'].append(seq_num)
+                            raw_data['network_latency_ms'].append(network_latency)
+                            raw_data['ssim'].append(0)
+                            raw_data['datasize'].append(data_size)
+                            raw_data['frame type'].append(frame_type_str)
                             continue
+                        if decoded_frame.size == 0:
+                            # print(f"[Warning] Decoded frame is empty at sequence {seq_num} ({frame_type_str})")
+                            ssim_scores.append(0)
+                            raw_data['sequence_number'].append(seq_num)
+                            raw_data['network_latency_ms'].append(network_latency)
+                            raw_data['ssim'].append(0)
+                            raw_data['datasize'].append(data_size)
+                            raw_data['frame type'].append(frame_type_str)
+                            continue
+
                         original_frame = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)
                         decoded_frame = cv2.cvtColor(decoded_frame, cv2.COLOR_BGR2GRAY)
                         ssim_score = ssim(original_frame, decoded_frame)
                         ssim_scores.append(ssim_score)
-                    except:
-                        ssim_scores.append(0)
 
+                        # raw data 기록
+                        raw_data['sequence_number'].append(seq_num)
+                        raw_data['network_latency_ms'].append(network_latency)
+                        raw_data['ssim'].append(ssim_score)
+                        raw_data['datasize'].append(data_size)
+                        raw_data['frame type'].append(frame_type_str)
+
+                    except Exception as e:
+                        # **에러 발생 시 I-frame/P-frame 정보 로깅**
+                        print(f"Decoding error at sequence {seq_num} ({frame_type_str}): {e}")
+                        ssim_scores.append(0)
+                        raw_data['sequence_number'].append(seq_num)
+                        raw_data['network_latency_ms'].append(network_latency)
+                        raw_data['ssim'].append(0)
+                        raw_data['datasize'].append(data_size)
+                        raw_data['frame type'].append(frame_type_str)
+
+                # 평균값 계산
                 avg_ssim = np.mean(ssim_scores) if len(ssim_scores) > 0 else 0
                 avg_datasize = np.mean(datasize_list) if len(datasize_list) > 0 else 0
                 print(f"    Average SSIM for GoP {gop}: {avg_ssim}")
                 print(f"    Average Data Size for GoP {gop}: {avg_datasize} bytes")
 
-                # Append results
+                # 결과 기록
                 results['method'].append(method)
                 results['gop'].append(gop)
                 results['prr'].append(prr)
                 results['avg_ssim'].append(avg_ssim)
                 results['avg_datasize'].append(avg_datasize)
 
-        # Save results to CSV
+                # [추가] raw data를 CSV 파일로 저장
+                csv_save_folder = os.path.join(self.env_logs_dir, 'baseline')
+                # csv_save_folder = os.path.join(csv_save_folder, str(int(training_data_split * 100)))
+                csv_save_folder = os.path.join(csv_save_folder, str(int(training_data_split * 100)))
+
+                # os.makedirs(os.path.dirname(csv_save_folder), exist_ok=True)
+                raw_data_df = pd.DataFrame(raw_data)
+                raw_data_csv_path = os.path.join(
+                    csv_save_folder,
+                    f"raw_data_{method}_gop{gop}_threshold_{self.latency_threshold}.csv"
+                )
+                raw_data_df.to_csv(raw_data_csv_path, index=False)
+                print(f"      Raw data saved to {raw_data_csv_path}")
+
+        # 종합 결과 저장
         results_df = pd.DataFrame(results)
-        results_df.to_csv(f"{env_logs_dir}/evaluation_results.csv", index=False)
-        print("Results saved to evaluation_results.csv")
+        summary_csv_path = os.path.join(csv_save_folder, f"evaluation_results_threshold_{self.latency_threshold}.csv")
+        results_df.to_csv(summary_csv_path, index=False)
+        print(f"Summary results saved to {summary_csv_path}")
 
-        self.plot_results(results, env_logs_dir)
-
+        # 그래프 플롯
+        # self.plot_results(results, self.env_logs_dir)
 
     def get_is_i_frame_list(self, gop_size, total_frames):
         """Generate I-frame flags based on GoP size."""
@@ -140,10 +247,15 @@ class PerformanceEvaluator:
         plt.title("PRR by Method")
         plt.xlabel("Method")
         plt.ylabel("PRR")
-        plt.savefig(f"{env_logs_dir}/prr_results.png")
-        print("PRR plot saved as prr_results.png")
+        baseline_folder_path = os.path.join(path, 'baseline')
+        graph_folder_path = os.path.join(baseline_folder_path, 'graph')
+        os.makedirs(os.path.dirname(graph_folder_path), exist_ok=True)
+        prr_plot_path = os.path.join(graph_folder_path, f"prr_results_threshold_{self.latency_threshold}.png")
+        plt.savefig(prr_plot_path)
+        print(f"PRR plot saved as {prr_plot_path}")
+        plt.close()
 
-        # SSIM and Data Size Plots by GoP
+        # SSIM / Data Size Plot
         for gop in self.gops:
             subset = results_df[results_df['gop'] == gop]
 
@@ -153,8 +265,10 @@ class PerformanceEvaluator:
             plt.title(f"SSIM by Method (GoP={gop})")
             plt.xlabel("Method")
             plt.ylabel("Average SSIM")
-            plt.savefig(f"{env_logs_dir}/ssim_results_gop_{gop}.png")
-            print(f"SSIM plot saved as ssim_results_gop_{gop}.png")
+            ssim_plot_path = os.path.join(graph_folder_path, f"ssim_results_gop_{gop}_threshold_{self.latency_threshold}.png")
+            plt.savefig(ssim_plot_path)
+            print(f"SSIM plot saved as {ssim_plot_path}")
+            plt.close()
 
             # Data Size Plot
             plt.figure()
@@ -162,14 +276,20 @@ class PerformanceEvaluator:
             plt.title(f"Data Size by Method (GoP={gop})")
             plt.xlabel("Method")
             plt.ylabel("Average Data Size (bytes)")
-            plt.savefig(f"{env_logs_dir}/datasize_results_gop_{gop}.png")
-            print(f"Data Size plot saved as datasize_results_gop_{gop}.png")
+            datasize_plot_path = os.path.join(graph_folder_path, f"datasize_results_gop_{gop}_threshold_{self.latency_threshold}.png")
+            plt.savefig(datasize_plot_path)
+            print(f"Data Size plot saved as {datasize_plot_path}")
+            plt.close()
 
 
 if __name__ == "__main__":
-    frames_dir = "/home/songmu/multipath/client/logs/2024_12_09_16_07/frames_with_sequence"
-    env_logs_dir = "/home/songmu/multipath/server/logs/2024_12_09_16_02"
-    latency_threshold = 35
-    training_data_split = 0.50
+    frames_dir = "/home/songmu/multipath/client/logs/2025_02_17_14_14/frames_with_sequence"
+    env_logs_dir = "/home/songmu/multipath/server/logs/2025_02_17_13_57"
+    # frames_dir = "/home/songmu/multipath/client/logs/2024_12_10_17_00/frames_with_sequence"
+    # env_logs_dir = "/home/songmu/multipath/server/logs/2024_12_10_16_45"
+
+    latency_threshold = 40
+    training_data_split = 0.6
+
     evaluator = PerformanceEvaluator(frames_dir, env_logs_dir, latency_threshold, training_data_split)
     evaluator.evaluate()

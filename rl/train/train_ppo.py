@@ -45,6 +45,7 @@ def train(agent, env, config, results_dir, start_episode=0):
                     'Step': step,
                     'Frame Number': info['seq_num'],
                     'Action': action,
+                    'Frame type': info['frame_type'],
                     'SSIM': info['ssim'],
                     'Data Size': info['datasize'],
                     'Frame loss': info['frame_loss'],

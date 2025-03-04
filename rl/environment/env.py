@@ -173,9 +173,6 @@ class StreamingEnvironment:
         # Increment step and check if done
         self.increment_step()
 
-        # print(f'\n\n{len(self.kt_packet_loss_history)}\n \
-        #       {self.lg_packet_loss_history}\n')
-        # Return state, reward, done, info
         info = {'seq_num': seq_num, 'ssim': self.last_ssim_value, 'datasize': self.last_datasize, 'frame_loss': frame_received}
         return self.state, reward, self.done, info
 

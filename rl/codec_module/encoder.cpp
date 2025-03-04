@@ -109,7 +109,7 @@ py::bytes Encoder::encode_frame(const std::string& frame_path, bool is_i_frame) 
     }
 
     frame->pts = frame_index++;
-    frame->pict_type = is_i_frame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    frame->pict_type = is_i_frame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_P;
 
     // 프레임을 인코더로 전송
     int ret = avcodec_send_frame(codec_ctx, frame);

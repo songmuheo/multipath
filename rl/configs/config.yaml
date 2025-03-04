@@ -1,39 +1,51 @@
 # configs/config.yaml
 
-# 실행 설정
-mode: train  # 'train' 또는 'eval'
+# Setting
+mode: eval  # 'train' 또는 'eval'
 algorithm: 'PPO'  # 'DQN' or 'PPO' 'RDQN'
+delay_steps: 2
 
-# train 모드
-num_episodes: 500
+action_type: scalar # scalar or vector
+
+# training mode
+num_episodes: 300
 model_save_freq: 10
-training_data_split: 0.5  # training 데이터셋 비율
+training_data_split: 0.6  # training 데이터셋 비율
 log_save_freq: 10  # 몇 에피소드마다 로그를 저장할지
-history_length: 50  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
+history_length: 30  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
 load_model_path:  # start initial state
-# "/home/songmu/Multipath/rl/data/results/2024_11_28_14_50/models/ppo_model_episode400.pth"
+# /home/songmu/multipath/rl/results/2025_01_26_18_21/models/ppo_model_episode350.pth
 
-# evaluate 모드
+# evaluation mode
 num_eval_episodes: 1
-model_path: /home/songmu/multipath/rl/results/2024_12_10_17_42/models/ppo_model_episode100.pth
+model_path: /home/songmu/multipath/rl/results/2025_02_21_20_19/models/ppo_model_episode280.pth
 
-# 환경 설정
-# frame_dir: data/frames/frames_og/
-frame_dir: /home/songmu/multipath/client/logs/2024_12_09_16_07/frames_with_sequence
-# kt_log_dir: 'data/env_logs/kt_log.csv'
-kt_log_dir: /home/songmu/multipath/server/logs/2024_12_09_16_02/kt_log.csv
-# lg_log_dir: 'data/env_logs/lg_log.csv'
-lg_log_dir: /home/songmu/multipath/server/logs/2024_12_09_16_02/lg_log.csv
-latency_threshold: 35  # ms
+# log path
+frame_dir: /home/songmu/multipath/client/logs/2025_02_17_14_14/frames_with_sequence
+kt_log_dir: /home/songmu/multipath/server/logs/2025_02_17_13_57/kt_log.csv
+lg_log_dir: /home/songmu/multipath/server/logs/2025_02_17_13_57/lg_log.csv
+
+# frame_dir: /home/songmu/multipath/client/logs/2024_12_10_17_00/frames_with_sequence
+# kt_log_dir: /home/songmu/multipath/server/logs/2024_12_10_16_45/kt_log.csv
+# lg_log_dir: /home/songmu/multipath/server/logs/2024_12_10_16_45/lg_log.csv
+
+# Environment, Reward
+# latency_threshold: 40  # ms
+latency_threshold: 100  # ms
 ssim_threshold: 0.9
 gamma_reward: 0.1
 state_num: 13
 
 # Normalize 설정
-min_datasize: 400
-max_datasize: 60000
-max_frames_since_loss: 10
-max_frames_since_iframe: 50
+# min_datasize: 500
+# max_datasize: 100000
+# max_frames_since_loss: 30
+# max_frames_since_iframe: 30
+
+min_datasize: 1000
+max_datasize: 50000
+max_frames_since_loss: 15
+max_frames_since_iframe: 100
 
 # 에이전트 하이퍼파라미터
 learning_rate: 0.001
@@ -41,21 +53,23 @@ learning_rate: 0.001
 # PPO
 batch_size_ppo: 4096
 update_timestep: 4096
-mini_batch_size: 256
+mini_batch_size: 512
 epsilon_clip: 0.2
-k_epochs: 7
+k_epochs: 6
 entropy_coef: 0.01
 value_loss_coef: 0.5
 lambda_gae: 0.96  # GAE 람다
-gamma: 0.98
+gamma: 0.97
 network_ppo: 'ActorCritic2'
 scheduler_type: LinearLR  # CosineAnnealingLR or LinearLR
 scheduler_T_max: 31721             # CosineAnnealingLR에 필요한 매개변수 (T_max)
 start_factor: 1.0 # LinearLR
 end_factor: 0.1  # LinearLR
-total_iters: 100  # LinearLR
+total_iters: 150  # LinearLR
 
-
+actions_vec:
+  path:  [KT, LG, Both]
+  frame: [I-frame, P-frame]
 
 actions:
   0:

@@ -1,5 +1,4 @@
-# agents/ppo_agent.py
-
+# agents/ppo_agent_vector.py
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,15 +8,17 @@ from collections import deque
 
 class PPOAgent(BaseAgent):
     def __init__(self, state_size, action_size, config):
+        """
+        action_size: 튜플 (path_size, frame_size)
+        """
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"device: {self.device}")
         self.config = config
         self.state_size = state_size
-        self.action_size = action_size
+        self.path_size, self.frame_size = action_size  # 벡터 방식: 두 축의 크기
 
-        # 하이퍼파라미터 로드
         self.gamma = self.config['gamma']
-        self.lambda_gae = self.config['lambda_gae']  # GAE 람다 추가
+        self.lambda_gae = self.config['lambda_gae']
         self.epsilon_clip = self.config['epsilon_clip']
         self.k_epochs = self.config['k_epochs']
         self.learning_rate = self.config['learning_rate']
@@ -25,13 +26,11 @@ class PPOAgent(BaseAgent):
         self.value_loss_coef = self.config['value_loss_coef']
         self.batch_size = self.config['batch_size_ppo']
         self.mini_batch_size = self.config['mini_batch_size']
-        self.update_timestep = config['update_timestep']  # 업데이트 주기 설정
-        self.timestep = 0  # 현재 스텝 초기화
+        self.update_timestep = config['update_timestep']
+        self.timestep = 0
 
-        # 모델 정의
         self.policy = self.build_model()
         self.optimizer = optim.Adam(self.policy.parameters(), lr=self.learning_rate)
-        # Scheduler 초기화
         self.scheduler_type = self.config['scheduler_type']
         self.scheduler = self._initialize_scheduler()
         self.policy_old = self.build_model()
@@ -41,11 +40,9 @@ class PPOAgent(BaseAgent):
         self.policy_old.to(self.device)
 
         self.memory = []
-
         self.is_eval_mode = False
 
     def _initialize_scheduler(self):
-        """스케줄러 초기화"""
         if self.scheduler_type == "CosineAnnealingLR":
             T_max = self.config['scheduler_T_max']
             return torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=T_max)
@@ -55,75 +52,58 @@ class PPOAgent(BaseAgent):
         else:
             raise ValueError(f"Unsupported scheduler type: {self.scheduler_type}")
 
-
     def build_model(self):
         network = self.config['network_ppo']
         if network == 'ActorCritic':
-            from models.ppo_models import ActorCritic
-            return ActorCritic(self.state_size, self.action_size)
+            from models.ppo_models_vector import ActorCritic
+            return ActorCritic(self.state_size, (self.path_size, self.frame_size))
         elif network == 'ActorCritic2':
-            from models.ppo_models import ActorCritic2
-            return ActorCritic2(self.state_size, self.action_size)
-        elif network == 'ActorCritic3':
-            from models.ppo_models import ActorCritic3
-            return ActorCritic3(self.state_size, self.action_size)
-        elif network == 'ActorCritic4':
-            from models.ppo_models import ActorCritic4
-            return ActorCritic4(self.state_size, self.action_size)
-        elif network == 'ActorCritic_batchnorm':
-            from models.ppo_models import ActorCritic_batchnorm
-            return ActorCritic_batchnorm(self.state_size, self.action_size)
-        elif network == 'ActorCritic2_batchnorm':
-            from models.ppo_models import ActorCritic2_batchnorm
-            return ActorCritic2_batchnorm(self.state_size, self.action_size)            
+            from models.ppo_models_vector import ActorCritic2
+            return ActorCritic2(self.state_size, (self.path_size, self.frame_size))
         else:
             raise ValueError(f"Unsupported model name: {network}")
 
-
     def select_action(self, state, deterministic=False):
         """
-        state에 대해 액션을 선택합니다.
-        - deterministic=False (기본값): 확률적 정책을 사용하여 샘플링.
-        - deterministic=True: 확률 분포의 argmax를 사용하여 결정적 정책으로 액션을 선택.
-        
-        평가 모드(evaluation)에서는 보통 deterministic=True로 호출하여 재현성을 보장합니다.
+        Action 선택 시 deterministic=True이면, 확률 분포의 argmax를 사용하여 결정적(Deterministic)으로 액션을 선택합니다.
+        기본값은 확률적(Stochastic) 정책(deterministic=False)입니다.
         """
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            action_probs, _ = self.policy_old(state)  # 이전 정책 사용
+            (path_probs, frame_probs), _ = self.policy_old(state)
 
         if deterministic:
-            # 결정적 정책: 확률 분포에서 가장 높은 확률을 가진 액션 선택
-            action = torch.argmax(action_probs, dim=-1)
-            # 결정적 선택 시 log_prob는 계산하지 않음 (evaluation 시 메모리 저장은 생략할 수 있음)
-            action_log_prob = None
+            # 결정적 정책: 가장 높은 확률의 액션 선택
+            path_action = torch.argmax(path_probs, dim=-1)
+            frame_action = torch.argmax(frame_probs, dim=-1)
         else:
             # 확률적 정책: Categorical 분포에서 샘플링
-            dist = torch.distributions.Categorical(action_probs)
-            action = dist.sample()
-            action_log_prob = dist.log_prob(action)
+            path_dist = torch.distributions.Categorical(path_probs)
+            frame_dist = torch.distributions.Categorical(frame_probs)
+            path_action = path_dist.sample()
+            frame_action = frame_dist.sample()
 
+        action = (path_action.item(), frame_action.item())
+        
         if not self.is_eval_mode:
             self.memory.append({
                 'state': state,
-                'action': action,
-                'action_log_prob': action_log_prob,
+                'path_action': path_action,
+                'frame_action': frame_action,
+                'acion_log_prob': (path_dist.log_prob(path_action) + frame_dist.log_prob(frame_action)) if not deterministic else None,
                 'reward': None,
                 'done': None
             })
-        return action.item()
-
+        return action
 
 
     def remember(self, reward, done):
-        # 최근 메모리에 reward와 done 추가
         self.memory[-1]['reward'] = reward
         self.memory[-1]['done'] = done
         self.timestep += 1
 
-        # 업데이트 주기에 도달하면 정책 업데이트
         loss = None
-        if self.timestep % self.update_timestep == 0:
+        if self.timestep % self.config['update_timestep'] == 0:
             loss = self.update()
             self.memory = []
         return loss
@@ -137,21 +117,20 @@ class PPOAgent(BaseAgent):
             gae = delta + self.gamma * self.lambda_gae * (1 - dones[step]) * gae
             returns.insert(0, gae + values[step])
         return returns
+
     def update(self):
-        # 메모리에서 데이터 추출
         states = torch.cat([m['state'] for m in self.memory]).to(self.device)
-        actions = torch.cat([m['action'] for m in self.memory]).to(self.device)
+        path_actions = torch.tensor([m['path_action'].item() for m in self.memory]).to(self.device)
+        frame_actions = torch.tensor([m['frame_action'].item() for m in self.memory]).to(self.device)
         rewards = [m['reward'] for m in self.memory]
         dones = [m['done'] for m in self.memory]
-        old_action_log_probs = torch.cat([m['action_log_prob'] for m in self.memory]).to(self.device)
+        old_action_log_probs = torch.stack([m['action_log_prob'] for m in self.memory]).to(self.device)
 
-        # 현재 가치 예측
         with torch.no_grad():
             _, state_values = self.policy(states)
             state_values = state_values.squeeze().cpu().numpy()
         state_values = list(state_values)
 
-        # 다음 상태 가치 예측
         if self.memory[-1]['done']:
             next_value = 0
         else:
@@ -160,69 +139,54 @@ class PPOAgent(BaseAgent):
                 _, next_value = self.policy(next_state)
                 next_value = next_value.item()
 
-        # GAE를 사용하여 리턴 및 어드밴티지 계산
         returns = self.compute_gae(rewards, dones, state_values, next_value)
         returns = torch.tensor(returns, dtype=torch.float32).to(self.device).detach()
         state_values = torch.tensor(state_values, dtype=torch.float32).to(self.device)
         advantages = returns - state_values
-
-        # 어드밴티지 정규화
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
 
-        # 손실 추적용 리스트
         losses = []
-
-        # Mini-Batch 학습
         total_data = len(states)
-        for _ in range(self.k_epochs):
+        for _ in range(self.config['k_epochs']):
             indices = np.arange(total_data)
             np.random.shuffle(indices)
-            for i in range(0, total_data, self.mini_batch_size):
-                batch_indices = indices[i:i+self.mini_batch_size]
+            for i in range(0, total_data, self.config['mini_batch_size']):
+                batch_indices = indices[i:i+self.config['mini_batch_size']]
                 batch_states = states[batch_indices]
-                batch_actions = actions[batch_indices]
+                batch_path_actions = path_actions[batch_indices]
+                batch_frame_actions = frame_actions[batch_indices]
                 batch_returns = returns[batch_indices]
                 batch_advantages = advantages[batch_indices]
                 batch_old_action_log_probs = old_action_log_probs[batch_indices]
 
-                # 배치에 대한 확률 및 가치 예측
-                action_probs, state_values = self.policy(batch_states)
-                dist = torch.distributions.Categorical(action_probs)
-                action_log_probs = dist.log_prob(batch_actions)
-                dist_entropy = dist.entropy()
+                (path_probs, frame_probs), state_values = self.policy(batch_states)
+                path_dist = torch.distributions.Categorical(path_probs)
+                frame_dist = torch.distributions.Categorical(frame_probs)
+                new_path_log_probs = path_dist.log_prob(batch_path_actions)
+                new_frame_log_probs = frame_dist.log_prob(batch_frame_actions)
+                new_action_log_probs = new_path_log_probs + new_frame_log_probs
 
-                # 확률 비 계산
-                ratios = torch.exp(action_log_probs - batch_old_action_log_probs.detach())
-
-                # 손실 함수 계산
+                ratios = torch.exp(new_action_log_probs - batch_old_action_log_probs.detach())
                 surr1 = ratios * batch_advantages
-                surr2 = torch.clamp(ratios, 1 - self.epsilon_clip, 1 + self.epsilon_clip) * batch_advantages
+                surr2 = torch.clamp(ratios, 1 - self.config['epsilon_clip'], 1 + self.config['epsilon_clip']) * batch_advantages
                 actor_loss = -torch.min(surr1, surr2).mean()
-                critic_loss = self.value_loss_coef * nn.MSELoss()(state_values.squeeze(), batch_returns)
-                entropy_loss = -self.entropy_coef * dist_entropy.mean()
+                critic_loss = self.config['value_loss_coef'] * nn.MSELoss()(state_values.squeeze(), batch_returns)
+                entropy_loss = -self.config['entropy_coef'] * (path_dist.entropy().mean() + frame_dist.entropy().mean())
 
                 loss = actor_loss + critic_loss + entropy_loss
-
-                # 손실 저장
                 losses.append(loss.item())
 
-                # 모델 업데이트
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
 
-        # 오래된 정책 업데이트
         self.policy_old.load_state_dict(self.policy.state_dict())
-
-        # 평균 손실 반환
         return np.mean(losses)
+
     def update_scheduler(self):
-        """스케줄러 업데이트 (에피소드 단위)"""
         self.scheduler.step()
 
     def get_current_lr(self):
-        """현재 학습률 반환"""
-        # 스케줄러에서 현재 학습률을 가져옴
         return self.scheduler.get_last_lr()[0]
 
     def set_train_mode(self):
@@ -250,5 +214,5 @@ class PPOAgent(BaseAgent):
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.policy_old.load_state_dict(self.policy.state_dict())
-        self.start_episode = checkpoint['episode'] + 1  # 다음 에피소드부터 시작
+        self.start_episode = checkpoint['episode'] + 1
         print(f"Model loaded from {file_path}, starting from episode {self.start_episode}")
