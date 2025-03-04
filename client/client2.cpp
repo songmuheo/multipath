@@ -210,27 +210,28 @@ private:
         int packet_count = 0;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             PacketHeader header;
-            // Frame이 생성 됐을 때의 time -> 현재 Encoded data의 sequence_number와 같은 frame이 아닐 수 있음
             header.timestamp_frame = timestamp_frame;
-            // Encoded data가 생성됐을 때의 time (Sending하기 직전의 time)
             header.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
 
             double encoding_latency = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
 
+            // 프레임 유형 확인 (I-frame or P-frame)
+            string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
+
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            log_packet_to_csv(sequence_number - 1, pkt->size, header.timestamp_frame, header.timestamp_sending, frame->pts, encoding_latency);
+            log_packet_to_csv(sequence_number - 1, pkt->size, header.timestamp_frame, header.timestamp_sending, frame->pts, encoding_latency, frame_type);
 
             auto send_task2 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
                 }
             });
-            
+
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0, (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
                     cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
@@ -250,23 +251,23 @@ private:
     }
 
     void open_log_file() {
-        // Save logs to the "logs" folder
         log_file.open(logs_folder + "/packet_log.csv");
         if (!log_file.is_open()) {
             throw runtime_error("Failed to open CSV log file");
         }
-        log_file << "sequence_number,pts,size,timestamp_frame,timstamp_sending,encoding_latency\n";
+        log_file << "sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type\n";
     }
 
-    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, double encoding_latency) {
+    void log_packet_to_csv(int sequence_number, int size, uint64_t timestamp, uint64_t sendtime, int64_t pts, double encoding_latency, const string& frame_type) {
         log_file << sequence_number << "," 
-                 << pts << ","
-                 << size << ","
-                 << timestamp << "," 
-                 << sendtime << ","
-                 << encoding_latency << ","
-                 << "\n";
+                << pts << ","
+                << size << ","
+                << timestamp << "," 
+                << sendtime << ","
+                << encoding_latency << ","
+                << frame_type << "\n";
     }
+
 
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }};
