@@ -16,3 +16,6 @@ find_library(SWSCALE swscale REQUIRED)
 
 add_executable(client client.cpp)
 target_link_libraries(client ${realsense2_LIBRARY} ${OpenCV_LIBS} ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE} pthread)
+
+add_executable(client2 client2.cpp)
+target_link_libraries(client ${realsense2_LIBRARY} ${OpenCV_LIBS} ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE} pthread)
