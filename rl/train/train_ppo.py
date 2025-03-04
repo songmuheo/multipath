@@ -34,11 +34,11 @@ def train(agent, env, config, results_dir, start_episode=0):
                 loss = agent.remember(reward, done)
                 if loss is not None:
                     episode_loss.append(loss)
+                state_dict = {f'State_{i}': val for i, val in enumerate(state)}
                 state = next_state
                 total_reward += reward
                 step += 1
 
-                
                 # 스텝별 로그 기록
                 logger.log_step({
                     'Episode': episode + 1,
@@ -51,6 +51,7 @@ def train(agent, env, config, results_dir, start_episode=0):
                     'Frame loss': info['frame_loss'],
                     'Reward': reward,
                     'Return': total_reward,
+                    **state_dict
                 })
 
                 # 진행 상황 업데이트

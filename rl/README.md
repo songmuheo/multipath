@@ -23,3 +23,6 @@ LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=$(pwd)/codec_module/
 
 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=/home/songmu/multipath/rl/build/codec_module python3 evaluation/evaluation_heuristic.py
 - heuristic 알고리즘 평가
+
+
+LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=$(pwd)/codec_module/build python3 test_encoder_decoder.py

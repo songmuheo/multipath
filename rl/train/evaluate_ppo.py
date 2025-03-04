@@ -31,6 +31,7 @@ def evaluate(agent, env, config, results_dir):
                     action = agent.select_action(state, deterministic=True)
                     # 환경에서 한 스텝 진행
                     next_state, reward, done, info = env.step(action)
+                    state_dict = {f'State_{i}': val for i, val in enumerate(state)}
                     state = next_state
                     return_ += reward
                     step += 1
@@ -69,6 +70,7 @@ def evaluate(agent, env, config, results_dir):
                         'Frame loss': info['frame_loss'],
                         'Reward': reward,
                         'Total Reward': return_,
+                        **state_dict
                     })
 
                     pbar.update(1)

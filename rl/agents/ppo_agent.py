@@ -113,8 +113,6 @@ class PPOAgent(BaseAgent):
             })
         return action.item()
 
-
-
     def remember(self, reward, done):
         # 최근 메모리에 reward와 done 추가
         self.memory[-1]['reward'] = reward

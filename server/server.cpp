@@ -44,24 +44,27 @@ void create_log_file(const char* logpath) {
 // - nal_unit_type == 5 : IDR -> I-frame
 // - nal_unit_type == 1 : Non-IDR -> P-frame (실제로는 B, P 등이 있지만 여기서는 단순화)
 // - 그 외 -> OTHER
+
 std::string get_h264_frame_type(const uint8_t* data, size_t size) {
     if (size < 5) {
         return "UNKNOWN";
     }
 
-    for (size_t i = 0; i < size - 4; i++) {
-        if (data[i] == 0x00 && data[i + 1] == 0x00) {
-            if (data[i + 2] == 0x01) {  // 3-byte Start Code (I-frame)
-                if ((data[i + 3] & 0x1F) == 5) return "I";
-            } 
-            else if (data[i + 2] == 0x00 && data[i + 3] == 0x01) {  // 4-byte Start Code (P-frame)
-                if ((data[i + 4] & 0x1F) == 1) return "P";
-            }
+    for (size_t i = 0; i < size - 3; i++) {
+        // I-frame: 3-byte Start Code (\x00\x00\x01)
+        if (i < size - 3 && data[i] == 0x00 && data[i + 1] == 0x00 && data[i + 2] == 0x01) {
+            if ((data[i + 3] & 0x1F) == 5) return "I";
+        }
+
+        // P-frame: 4-byte Start Code (\x00\x00\x00\x01)
+        if (i < size - 4 && data[i] == 0x00 && data[i + 1] == 0x00 && data[i + 2] == 0x00 && data[i + 3] == 0x01) {
+            if ((data[i + 4] & 0x1F) == 1) return "P";
         }
     }
 
     return "OTHER";
 }
+
 
 // 패킷 정보를 CSV 파일에 기록하는 함수
 // frame_type을 새로 추가

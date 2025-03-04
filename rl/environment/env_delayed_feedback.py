@@ -43,10 +43,6 @@ class StreamingEnvironment:
         self.gamma_reward = self.config['gamma_reward']
         self.history_length = self.config['history_length']
         self.actions = self.config['actions']
-        # if self.config['action_type'] == 'scalar':
-            
-        # elif self.config['action_type'] == 'vector':
-        #     self.actions = self.config['actions_vec'] 
         self.state_num = self.config['state_num']
 
         # 새로 추가된 지연 피드백 스텝
@@ -91,13 +87,14 @@ class StreamingEnvironment:
         self.lg_latency_history = []
         self.kt_packet_loss_history = []
         self.lg_packet_loss_history = []
+        self.datasize_history = []
 
         self.kt_last_latency = 0
         self.lg_last_latency = 0
         self.last_encoding_type = 0  # 0: I-frame, 1: P-frame
         self.frames_since_last_iframe = 0
         self.last_datasize = 0
-        self.last_ssim_value = 0
+        # self.last_ssim_value = 0
         self.frames_since_last_loss = 0
 
     def compute_normalization_params(self):
@@ -109,7 +106,7 @@ class StreamingEnvironment:
         # variance
         variance_values = self.compute_latency_variances()
         self.min_variance = np.min(variance_values) if len(variance_values) > 0 else 0
-        self.max_variance = np.max(variance_values) if len(variance_values) > 0 else 1
+        self.max_variance = np.percentile(variance_values, 98) if len(variance_values) > 0 else 1
 
     def get_all_latency_values(self):
         """Retrieve all latency values from network logs."""
@@ -151,28 +148,26 @@ class StreamingEnvironment:
             self.sequence_numbers = self.sequence_numbers[split_index- self.history_length - self.delay_steps:]
     def get_frame_type(self, encoded_data):
         """
-        encoded_data에서 NAL 유닛을 분석하여 프레임 타입(I-frame 또는 P-frame)을 반환합니다.
+        H.264 NAL 유닛을 분석하여 프레임 타입을 반환합니다.
+        - I-frame: 3-byte Start Code (\x00\x00\x01)
+        - P-frame: 4-byte Start Code (\x00\x00\x00\x01)
         """
         if len(encoded_data) < 5:
             return "Unknown"
-        
-        nal_units = []
-        start_code_prefix = b'\x00\x00\x00\x01'
-        start_positions = [i for i in range(len(encoded_data) - 4)
-                        if encoded_data[i:i+4] == start_code_prefix]
-        
-        for pos in start_positions:
-            nal_unit = encoded_data[pos + 4]
-            nal_type = nal_unit & 0x1F  # lower 5 bits
-            nal_units.append(nal_type)
-        
-        # 예시: I-frame이면 보통 NAL type 5가 포함되어야 합니다.
-        if 5 in nal_units:
-            return "I-frame"
-        elif 1 in nal_units:
-            return "P-frame"
-        else:
-            return f"Unknown (NAL types: {nal_units})"
+
+        i = 0
+        while i < len(encoded_data) - 5:
+            # I-frame (3-byte Start Code)
+            if encoded_data[i:i+3] == b'\x00\x00\x01' and (encoded_data[i+3] & 0x1F) == 5:
+                return "I-frame"
+            
+            # P-frame (4-byte Start Code)
+            if encoded_data[i:i+4] == b'\x00\x00\x00\x01' and (encoded_data[i+4] & 0x1F) == 1:
+                return "P-frame"
+
+            i += 1  # 한 바이트씩 이동하며 탐색
+
+        return "Unknown"
 
     def reset(self):
         """
@@ -339,6 +334,10 @@ class StreamingEnvironment:
         # 보상 계산
         reward = self.calculate_reward(frame_received, encoded_data, frame_path, path_choice)
 
+        self.datasize_history.append(self.last_datasize)
+        if len(self.datasize_history) > self.history_length:
+            self.datasize_history.pop(0)
+
         return seq_num, reward, frame_received, frame_type_str
 
     def build_current_state(self):
@@ -376,16 +375,13 @@ class StreamingEnvironment:
         state.append(min(self.frames_since_last_iframe / self.max_frames_since_iframe, 1.0))
         # 11) 최근 전송 프레임 데이터 사이즈 (정규화)
         state.append(self.normalize_datasize(self.last_datasize))
-        # 12) 최근 프레임의 SSIM 값
-        state.append(self.last_ssim_value)
+        # 12) 최근 N 스텝 평균 데이터 사이즈 (정규화)
+        recent_mean_datasize = np.mean(self.datasize_history) if self.datasize_history else 0.0
+        state.append(self.normalize_datasize(recent_mean_datasize))
         # 13) 마지막 손실 이후 지난 프레임 수 (정규화)
         state.append(min(self.frames_since_last_loss / self.max_frames_since_loss, 1.0))
 
         return state
-
-    # def map_action(self, action):
-    #     """Map action index to path choice and frame type. ex) actions[action]"""
-    #     return self.actions[action]
 
     def map_action(self, action):
         """

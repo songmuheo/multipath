@@ -1,7 +1,7 @@
 # configs/config.yaml
 
 # Setting
-mode: eval  # 'train' 또는 'eval'
+mode: train  # 'train' 또는 'eval'
 algorithm: 'PPO'  # 'DQN' or 'PPO' 'RDQN'
 delay_steps: 2
 
@@ -11,8 +11,8 @@ action_type: scalar # scalar or vector
 num_episodes: 300
 model_save_freq: 10
 training_data_split: 0.6  # training 데이터셋 비율
-log_save_freq: 10  # 몇 에피소드마다 로그를 저장할지
-history_length: 30  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
+log_save_freq: 1  # 몇 에피소드마다 로그를 저장할지
+history_length: 60  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
 load_model_path:  # start initial state
 # /home/songmu/multipath/rl/results/2025_01_26_18_21/models/ppo_model_episode350.pth
 
@@ -31,7 +31,7 @@ lg_log_dir: /home/songmu/multipath/server/logs/2025_02_17_13_57/lg_log.csv
 
 # Environment, Reward
 # latency_threshold: 40  # ms
-latency_threshold: 100  # ms
+latency_threshold: 30  # ms
 ssim_threshold: 0.9
 gamma_reward: 0.1
 state_num: 13
@@ -42,10 +42,10 @@ state_num: 13
 # max_frames_since_loss: 30
 # max_frames_since_iframe: 30
 
-min_datasize: 1000
-max_datasize: 50000
-max_frames_since_loss: 15
-max_frames_since_iframe: 100
+min_datasize: 100
+max_datasize: 45000
+max_frames_since_loss: 10
+max_frames_since_iframe: 50
 
 # 에이전트 하이퍼파라미터
 learning_rate: 0.001

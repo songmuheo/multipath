@@ -261,7 +261,7 @@ pkgcfg_lib_FFMPEG_dl:FILEPATH=/usr/lib/x86_64-linux-gnu/libdl.so
 pkgcfg_lib_FFMPEG_drm:FILEPATH=/usr/lib/x86_64-linux-gnu/libdrm.so
 
 //Path to a library.
-pkgcfg_lib_FFMPEG_lzma:FILEPATH=pkgcfg_lib_FFMPEG_lzma-NOTFOUND
+pkgcfg_lib_FFMPEG_lzma:FILEPATH=/usr/lib/x86_64-linux-gnu/liblzma.so
 
 //Path to a library.
 pkgcfg_lib_FFMPEG_m:FILEPATH=/usr/lib/x86_64-linux-gnu/libm.so

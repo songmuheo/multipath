@@ -30,6 +30,7 @@ def train(agent, env, config, results_dir):
                 action, max_q_value = agent.select_action(state)
                 next_state, reward, done, info = env.step(action)
                 agent.remember(state, action, reward, next_state, done)
+                # state_log = state
                 state = next_state
                 total_reward += reward
                 step += 1

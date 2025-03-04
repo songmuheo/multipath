@@ -38,28 +38,30 @@ void Encoder::init_encoder() {
 
     AVDictionary* opt = nullptr;
     
-    // (a) Preset, Tune, CRF 등
-    av_dict_set(&opt, "preset", "veryfast", 0);
+    // Preset and tune settings for low latency
+    av_dict_set(&opt, "preset", "veryfast", 0);    // Use "superfast" if you want better compression
     av_dict_set(&opt, "tune", "zerolatency", 0);
-    av_dict_set(&opt, "crf", "26", 0);
 
-    // (b) x264-params: 필요한 모든 x264 옵션을 하나의 문자열로 몰아서 전달
-    //    keyint=30, min-keyint=30, scenecut=0 등으로 정확히 30프레임 간격으로 I-frame을 강제
-    //    (B-프레임 0, lookahead=0, refs=1 등)
-    std::string x264_params =
-        "keyint=10:"
-        "min-keyint=10:"
-        "scenecut=0:"
-        "bframes=0:"
-        "force-cfr=1:"
-        "rc-lookahead=0:"
-        "ref=1:"
-        "sliced-threads=0:"
-        "aq-mode=1:"
-        "trellis=0:"
-        "psy-rd=1.0:1.0";
+    // Disable B-frames explicitly
+    av_dict_set(&opt, "bframes", "0", 0);
 
-    av_dict_set(&opt, "x264-params", x264_params.c_str(), 0);
+    // Rate control settings
+    av_dict_set(&opt, "crf", "21", 0);                 // Adjust CRF value as needed (lower = better quality)
+    av_dict_set(&opt, "rc-lookahead", "0", 0);         // Disable look-ahead
+    av_dict_set(&opt, "scenecut", "0", 0);             // Disable scene cut detection
+
+    // Keyframe interval settings
+    av_dict_set(&opt, "keyint", "30", 0);              // Set to frame rate
+    av_dict_set(&opt, "min-keyint", "30", 0);          // Force constant keyframe interval
+
+    // Additional settings for latency and quality
+    av_dict_set(&opt, "refs", "1", 0);                 // Use 3 reference frame
+    av_dict_set(&opt, "no-sliced-threads", "1", 0);    // Disable sliced threads for better latency
+    av_dict_set(&opt, "aq-mode", "1", 0);              // Disable adaptive quantization
+    av_dict_set(&opt, "trellis", "0", 0);              // Disable trellis optimization
+
+    av_dict_set(&opt, "psy-rd", "1.0", 0);
+    av_dict_set(&opt, "psy-rdoq", "1.0", 0);
 
     if (avcodec_open2(codec_ctx, codec, &opt) < 0) {
         av_dict_free(&opt);

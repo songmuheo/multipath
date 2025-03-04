@@ -6,9 +6,33 @@ from skimage.metrics import structural_similarity as ssim
 from PIL import Image
 import matplotlib.pyplot as plt
 
+def get_frame_type(encoded_data):
+    """
+    H.264 NAL 유닛을 분석하여 프레임 타입을 반환합니다.
+    - I-frame: 3-byte Start Code (\x00\x00\x01)
+    - P-frame: 4-byte Start Code (\x00\x00\x00\x01)
+    """
+    if len(encoded_data) < 5:
+        return "Unknown"
+
+    i = 0
+    while i < len(encoded_data) - 5:
+        # I-frame (3-byte Start Code)
+        if encoded_data[i:i+3] == b'\x00\x00\x01' and (encoded_data[i+3] & 0x1F) == 5:
+            return "I-frame"
+        
+        # P-frame (4-byte Start Code)
+        if encoded_data[i:i+4] == b'\x00\x00\x00\x01' and (encoded_data[i+4] & 0x1F) == 1:
+            return "P-frame"
+
+        i += 1  # 한 바이트씩 이동하며 탐색
+
+    return "Unknown"
+
+
 def main():
     metric = 'ssim'
-    frames_dir = 'data/frames/frames_og/'
+    frames_dir = '/home/songmu/multipath/client/logs/2025_02_17_14_14/frames_with_sequence/'
     frame_files = os.listdir(frames_dir)
     
     # Extract sequence number and sort files based on it
@@ -17,7 +41,7 @@ def main():
 
     # GOP 설정 리스트
     # gop_values = [1, 3, 5, 7, 10, 15, 20]
-    gop_values = [1]
+    gop_values = [10]
     ssim_avg = []
     psnr_avg = []
 
@@ -34,14 +58,17 @@ def main():
         else:
             psnr_values = []
         data_sizes = []
-
+        i = 0
         for idx, file_name in enumerate(frames_to_process):
             frame_path = os.path.join(frames_dir, file_name)
-            print(frame_path)
+            i += 1
+            # print(frame_path)
 
             # I-frame 여부 결정
             is_i_frame = (idx % gop == 0)
             encoded_data = encoder.encode_frame(frame_path, is_i_frame)
+            type_str = get_frame_type(encoded_data)
+            print(f"num: {i}    type: {type_str}    datasize: {len(encoded_data)}")
             encoded_frames.append(encoded_data)
 
             # Data size
@@ -76,10 +103,10 @@ def main():
                     ssim_values.append(0)
                 else:
                     psnr_values.append(0)
-            if metric == 'ssim':
-                print(f"Frame {idx}: Data Size = {data_size} bytes, SSIM = {ssim_values[-1]:.4f}")
-            else:
-                print(f"Frame {idx}: Data Size = {data_size} bytes, PSNR = {psnr_values[-1]:.4f}")
+            # if metric == 'ssim':
+            #     print(f"Frame {idx}: Data Size = {data_size} bytes, SSIM = {ssim_values[-1]:.4f}")
+            # else:
+            #     print(f"Frame {idx}: Data Size = {data_size} bytes, PSNR = {psnr_values[-1]:.4f}")
 
         if metric == 'ssim':
             # SSIM 평균 계산

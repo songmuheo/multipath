@@ -17,7 +17,7 @@ class PerformanceEvaluator:
         self.adjust_sequence_numbers(training_data_split)
         # self.methods = ['kt', 'lg', 'combine']
         self.methods = ['combine', 'kt', 'lg']
-        self.gops = [1, 10, 30]
+        self.gops = [1, 10, 15, 30, 60]
 
     def get_sequence_numbers(self):
         """Map sequence numbers to file paths."""
@@ -47,32 +47,30 @@ class PerformanceEvaluator:
         total_packets = len(latency_series)
         received_packets = (latency_series <= self.latency_threshold).sum()
         return received_packets / total_packets
+
     def get_frame_type(self, encoded_data):
         """
-        H.264 NAL Unit을 분석하여 프레임 타입을 반환
+        H.264 NAL 유닛을 분석하여 프레임 타입을 반환합니다.
+        - I-frame: 3-byte Start Code (\x00\x00\x01)
+        - P-frame: 4-byte Start Code (\x00\x00\x00\x01)
         """
         if len(encoded_data) < 5:
             return "Unknown"
 
-        # NAL Unit 헤더는 보통 0x00 00 00 01 또는 0x00 00 01 로 시작함
-        nal_start_index = encoded_data.find(b'\x00\x00\x00\x01')
-        if nal_start_index == -1:
-            nal_start_index = encoded_data.find(b'\x00\x00\x01')
-            if nal_start_index == -1:
-                return "Unknown"  # NAL Unit을 찾을 수 없는 경우
+        i = 0
+        while i < len(encoded_data) - 5:
+            # I-frame (3-byte Start Code)
+            if encoded_data[i:i+3] == b'\x00\x00\x01' and (encoded_data[i+3] & 0x1F) == 5:
+                return "I-frame"
+            
+            # P-frame (4-byte Start Code)
+            if encoded_data[i:i+4] == b'\x00\x00\x00\x01' and (encoded_data[i+4] & 0x1F) == 1:
+                return "P-frame"
 
-        # NAL Unit의 첫 번째 바이트 분석 (H.264: NAL type 5 -> I-frame, 1 -> P-frame)
-        nal_unit = encoded_data[nal_start_index + 4]  # NAL Unit 헤더 다음 바이트
-        nal_type = nal_unit & 0x1F  # Lower 5 bits
+            i += 1  # 한 바이트씩 이동하며 탐색
 
-        if nal_type == 5:
-            return "I-frame"
-        elif nal_type == 1:
-            return "P-frame"
-        elif nal_type in [2, 3, 4]:
-            return "B-frame"
-        else:
-            return f"Unknown (NAL type {nal_type})"
+        return "Unknown"
+
 
 
     def evaluate(self):
@@ -211,7 +209,7 @@ class PerformanceEvaluator:
                 # [추가] raw data를 CSV 파일로 저장
                 csv_save_folder = os.path.join(self.env_logs_dir, 'baseline')
                 # csv_save_folder = os.path.join(csv_save_folder, str(int(training_data_split * 100)))
-                csv_save_folder = os.path.join(csv_save_folder, str(int(training_data_split * 100)))
+                # csv_save_folder = os.path.join(csv_save_folder, str(int(training_data_split * 100)))
 
                 # os.makedirs(os.path.dirname(csv_save_folder), exist_ok=True)
                 raw_data_df = pd.DataFrame(raw_data)
@@ -288,7 +286,7 @@ if __name__ == "__main__":
     # frames_dir = "/home/songmu/multipath/client/logs/2024_12_10_17_00/frames_with_sequence"
     # env_logs_dir = "/home/songmu/multipath/server/logs/2024_12_10_16_45"
 
-    latency_threshold = 40
+    latency_threshold = 100
     training_data_split = 0.6
 
     evaluator = PerformanceEvaluator(frames_dir, env_logs_dir, latency_threshold, training_data_split)
