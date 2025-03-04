@@ -56,7 +56,7 @@ public:
         codec_ctx->framerate = {FPS, 1};
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
         codec_ctx->max_b_frames = 0;    // B-프레임 사용 안 함
-        codec_ctx->gop_size = 30;       // (FFmpeg 레벨) I-frame 간격
+        codec_ctx->gop_size = 10;       // (FFmpeg 레벨) I-frame 간격
 
         // 4) libx264 옵션 설정
         AVDictionary* opt = nullptr;
@@ -70,8 +70,8 @@ public:
         //    keyint=30, min-keyint=30, scenecut=0 등으로 정확히 30프레임 간격으로 I-frame을 강제
         //    (B-프레임 0, lookahead=0, refs=1 등)
         std::string x264_params =
-            "keyint=30:"
-            "min-keyint=30:"
+            "keyint=10:"
+            "min-keyint=10:"
             "scenecut=0:"
             "bframes=0:"
             "force-cfr=1:"
