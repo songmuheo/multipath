@@ -313,18 +313,15 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
 // 예시) 콜백 함수
 static void on_rx_data(pj_turn_sock *sock,
                        void *user_data,
-                       void *pkt,
-                       pj_size_t size,
+                       unsigned int size,
                        const pj_sockaddr_t *src_addr,
-                       int addr_len)
+                       unsigned int addr_len)
 {
-    // pkt ~ size 범위가 실제 수신 데이터
     if (size > 0) {
-        // 문자열이라고 가정하면:
-        std::string data(reinterpret_cast<char*>(pkt), size);
-        std::cout << "[TURN] Received via callback: " << data << std::endl;
+        std::cout << "[TURN] Received data of size: " << size << std::endl;
     }
 }
+
 
 // 예시) 콜백 함수들을 모아놓은 구조체
 static pj_turn_sock_cb g_turn_callbacks;
