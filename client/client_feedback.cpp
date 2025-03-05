@@ -152,7 +152,6 @@ public:
         log_file.close();
     }
 
-    // 영상 스트리밍 함수
     void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
         frame->pts = frame_counter++;
 
@@ -408,12 +407,12 @@ void turn_ack_receiver_thread()
     ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     // password는 "ephemeral_username:TURN_REALM"을 기반으로 HMAC 계산
     ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
-    // long-term 인증 방식 사용
-    auth_cred.type = PJ_STUN_AUTH_CRED_LONG_TERM;
-    auth_cred.data.long_term.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
-    auth_cred.data.long_term.realm = pj_str(const_cast<char*>(TURN_REALM));
-    auth_cred.data.long_term.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
-    auth_cred.data.long_term.data_type = PJ_STUN_PASSWD_PLAIN;
+    // long-term 인증 방식 사용 (구조체 멤버는 data.lt)
+    auth_cred.type = PJ_STUN_AUTH_LONG_TERM;
+    auth_cred.data.lt.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
+    auth_cred.data.lt.realm = pj_str(const_cast<char*>(TURN_REALM));
+    auth_cred.data.lt.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    auth_cred.data.lt.data_type = PJ_STUN_PASSWD_PLAIN;
 
     status = pj_turn_sock_alloc(
         turn_sock,
