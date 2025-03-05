@@ -18,7 +18,7 @@
 #include <cstring>
 #include "config.h"
 
-// OpenSSL 헤더 추가 (HMAC 계산용)
+// OpenSSL 헤더 (HMAC 계산용)
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 
@@ -50,9 +50,8 @@ struct PacketHeader {
 
 // ----- TURN Credential Helper Functions ----- //
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
-    // 현재 시간을 초 단위로 얻은 후 유효시간을 더함
     uint64_t expiration = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
+                              std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
     return std::to_string(expiration) + ":" + identifier;
 }
 
@@ -173,15 +172,12 @@ public:
     atomic<int> sequence_number;
 
 private:
-    // 출력 폴더 생성
     void create_and_set_output_folders() {
         auto now = chrono::system_clock::now();
         time_t time_now = chrono::system_clock::to_time_t(now);
         tm local_time = *localtime(&time_now);
-
         char folder_name[100];
         strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
-
         string base_folder = SAVE_FILEPATH + string(folder_name);
         fs::create_directories(base_folder);
         frames_folder = base_folder + "/frames";
@@ -190,7 +186,6 @@ private:
         fs::create_directories(logs_folder);
     }
 
-    // sockaddr_in 생성
     struct sockaddr_in create_sockaddr(const char* ip, int port) {
         struct sockaddr_in addr = {};
         addr.sin_family = AF_INET;
@@ -199,16 +194,13 @@ private:
         return addr;
     }
 
-    // 소켓 생성 및 인터페이스 바인딩
     int create_socket_and_bind(const char* interface_ip, const char* interface_name) {
         int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
         if (sockfd < 0) throw runtime_error("Socket creation failed");
-
         if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
             close(sockfd);
             throw runtime_error("SO_BINDTODEVICE failed");
         }
-
         struct sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
         if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
             close(sockfd);
@@ -217,7 +209,6 @@ private:
         return sockfd;
     }
 
-    // PNG 파일로 프레임 저장
     void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp_frame) {
         string filename = frames_folder + "/" + to_string(timestamp_frame) + ".png";
         cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
@@ -226,13 +217,11 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
-    // 인코딩 및 송신
     void encode_and_send_frame(uint64_t timestamp_frame) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
             return;
         }
-
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             PacketHeader header;
@@ -241,24 +230,18 @@ private:
                 chrono::duration_cast<chrono::microseconds>(
                     chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
-
             double encoding_latency =
                 (header.timestamp_sending - header.timestamp_frame) / 1000.0;
-
             string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
-
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-
             log_packet_to_csv(sequence_number - 1, pkt->size,
                               header.timestamp_frame,
                               header.timestamp_sending,
                               frame->pts,
                               encoding_latency,
                               frame_type);
-
-            // 두 인터페이스로 전송 (비동기 전송)
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0,
                            (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
@@ -269,10 +252,8 @@ private:
                            (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0)
                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
             });
-
             send_task1.get();
             send_task2.get();
-
             av_packet_unref(pkt.get());
         }
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
@@ -300,7 +281,6 @@ private:
                  << frame_type << "\n";
     }
 
-    // 멤버 변수들
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{
         nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }
@@ -330,10 +310,8 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
         rs2::frameset frames = pipe.wait_for_frames();
         rs2::video_frame color_frame = frames.get_color_frame();
         if (!color_frame) continue;
-
         uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
             chrono::system_clock::now().time_since_epoch()).count();
-
         streamer.stream(color_frame, timestamp_frame);
     }
 }
@@ -363,13 +341,17 @@ void turn_ack_receiver_thread()
     pj_pool_t *pool = nullptr;
     pj_ioqueue_t *ioqueue = nullptr;
     pj_stun_config stun_cfg;
-    pj_timer_heap_t *timer_heap = nullptr;  // 타이머 힙 변수
+    pj_timer_heap_t *timer_heap = nullptr;
 
     pj_turn_sock *turn_sock = nullptr;
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
-    // PJLIB 초기화
+    // 변수들을 최상단에 선언하여 goto 문제 해결
+    std::string ephemeral_username;
+    std::string ephemeral_password;
+    pj_str_t server_ip_str;
+
     status = pj_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_init() error" << std::endl;
@@ -421,15 +403,13 @@ void turn_ack_receiver_thread()
 
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
 
-    // ---- 동적 자격증명 생성 (ephemeral credentials) ---- //
-    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    std::string ephemeral_password = compute_turn_password(ephemeral_username, TURN_SECRET);
-
+    // 동적 자격증명 생성
+    ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    ephemeral_password = compute_turn_password(ephemeral_username, TURN_SECRET);
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
     auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
-    // ------------------------------------------------------- //
 
     status = pj_turn_sock_alloc(
         turn_sock,
@@ -444,16 +424,17 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    pj_str_t server_ip_str = pj_str(const_cast<char*>(SERVER_IP));
-    status = pj_turn_sock_add_perm(turn_sock, &server_ip_str);
+    server_ip_str = pj_str(const_cast<char*>(SERVER_IP));
+    // pj_turn_sock_set_perm 사용 (기존 pj_turn_sock_add_perm 대신)
+    status = pj_turn_sock_set_perm(turn_sock, &server_ip_str);
     if (status != PJ_SUCCESS) {
-        std::cerr << "pj_turn_sock_add_perm() error" << std::endl;
+        std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
         goto on_return;
     }
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
     while (turn_running.load()) {
-        pj_thread_sleep(10);  // 10ms
+        pj_thread_sleep(10);
     }
 
 on_return:
