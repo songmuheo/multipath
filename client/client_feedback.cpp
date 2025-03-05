@@ -350,8 +350,6 @@ atomic<bool> turn_running{true};
 
 void turn_ack_receiver_thread()
 {
-    std::string relay_msg;
-    pj_str_t msg;
     pj_status_t status;
     pj_caching_pool cp;
     pj_pool_t *pool = nullptr;
@@ -363,11 +361,17 @@ void turn_ack_receiver_thread()
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
+    // 다른 필요한 선언...
+    std::string relay_msg;
+    pj_str_t msg;
+    pj_str_t relay_ip;
+    pj_uint16_t relay_port;
+
     // 모든 관련 변수들을 함수 시작 시 선언
     std::string ephemeral_username;
     std::string ephemeral_password;
     pj_str_t ip_str = pj_str(const_cast<char*>(SERVER_IP));
-    pj_sockaddr peer_addr;
+    pj_sockaddr_t peer_addr;
 
     status = pj_init();
     if (status != PJ_SUCCESS) {
@@ -455,21 +459,29 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 릴레이 주소 얻기 및 서버에 전송
-    pj_str_t relay_ip;
-    pj_uint16_t relay_port;
-    status = pj_turn_sock_get_info(turn_sock, &relay_ip, &relay_port);
+    // 릴레이 정보 가져오기
+    pj_turn_session_info info;
+    status = pj_turn_sock_get_info(turn_sock, &info);
     if (status != PJ_SUCCESS) {
         std::cerr << "Failed to get relay info" << std::endl;
         goto on_return;
     }
-    relay_ip = info.relay_addr;
+
+    // 릴레이 IP와 포트 추출
+    char buffer[100];
+    pj_sockaddr_print(&info.relay_addr, buffer, sizeof(buffer), 0);
+    relay_ip = pj_str(buffer);
     relay_port = info.relay_port;
-    std::string relay_msg = "RELAY " + std::string(relay_ip.ptr) + ":" + std::to_string(relay_port);
-    pj_str_t msg = pj_str(const_cast<char*>(relay_msg.c_str()));
-    status = pj_turn_sock_sendto(turn_sock, (const pj_uint8_t*)msg.ptr, msg.slen, &peer_addr, peer_addr.addr_len);
+
+    // 릴레이 메시지 준비
+    relay_msg = "RELAY " + std::string(relay_ip.ptr) + ":" + std::to_string(relay_port);
+    msg = pj_str(const_cast<char*>(relay_msg.c_str()));
+
+    // 서버에 릴레이 주소 전송
+    status = pj_turn_sock_sendto(turn_sock, (const pj_uint8_t*)msg.ptr, msg.slen, &peer_addr, pj_sockaddr_get_len(&peer_addr));
     if (status != PJ_SUCCESS) {
         std::cerr << "Failed to send relay address to server" << std::endl;
+        goto on_return;
     }
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
