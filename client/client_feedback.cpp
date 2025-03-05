@@ -45,7 +45,6 @@ struct PacketHeader {
 class VideoStreamer {
 public:
     VideoStreamer() : frame_counter(0), sequence_number(0) {
-        // 출력 폴더 생성 및 로그 파일 오픈
         create_and_set_output_folders();
         open_log_file();
 
@@ -132,8 +131,11 @@ public:
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
         const uint8_t* src_slices[1] = { yuyv_data };
         int src_stride[1] = { 2 * WIDTH };
-        sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT,
-                  frame->data, frame->linesize);
+        if (sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT,
+                      frame->data, frame->linesize) < 0) {
+            cerr << "Error in sws_scale" << endl;
+            return;
+        }
 
         save_frame(color_frame, timestamp_frame);
         encode_and_send_frame(timestamp_frame);
@@ -227,7 +229,7 @@ private:
                               encoding_latency,
                               frame_type);
 
-            // 두 인터페이스로 전송
+            // 두 인터페이스로 전송 (필요에 따라 async 대신 순차 전송도 고려)
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0,
                            (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
@@ -291,26 +293,23 @@ private:
 };
 
 // ----------------------------
-// client_stream 함수 추가!!
+// client_stream 함수
 // ----------------------------
 void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running)
 {
     while (running.load()) {
-        // RealSense에서 프레임 가져오기
         rs2::frameset frames = pipe.wait_for_frames();
         rs2::video_frame color_frame = frames.get_color_frame();
         if (!color_frame) continue;
 
-        // 현재 시간(마이크로초) 기준 타임스탬프
         uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
             chrono::system_clock::now().time_since_epoch()).count();
 
-        // VideoStreamer로 전달
         streamer.stream(color_frame, timestamp_frame);
     }
 }
 
-// 콜백 함수
+// TURN 데이터 수신 콜백 함수
 static void on_rx_data(pj_turn_sock *sock,
                        void *user_data,
                        unsigned int size,
@@ -322,23 +321,25 @@ static void on_rx_data(pj_turn_sock *sock,
     }
 }
 
-
 // 콜백 함수들을 모아놓은 구조체
 static pj_turn_sock_cb g_turn_callbacks;
+
+// 전역 종료 플래그 (TURN 스레드용)
+atomic<bool> turn_running{true};
 
 void turn_ack_receiver_thread()
 {
     pj_status_t    status;
     pj_caching_pool cp;
-    pj_pool_t      *pool       = nullptr;
-    pj_ioqueue_t   *ioqueue    = nullptr;
+    pj_pool_t      *pool    = nullptr;
+    pj_ioqueue_t   *ioqueue = nullptr;
     pj_stun_config  stun_cfg;
-    pj_turn_sock   *turn_sock  = nullptr;
+
+    pj_turn_sock   *turn_sock = nullptr;
 
     pj_str_t        turn_server;
     pj_stun_auth_cred auth_cred;
 
-    // 1) PJ 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_init() error" << std::endl;
@@ -346,28 +347,24 @@ void turn_ack_receiver_thread()
     }
     pj_caching_pool_init(&cp, nullptr, 0);
 
-    // 2) 메모리 풀 생성
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
     if (!pool) {
         std::cerr << "Failed to create pool" << std::endl;
         goto on_return;
     }
 
-    // 3) ioqueue 생성
     status = pj_ioqueue_create(pool, 64, &ioqueue);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_ioqueue_create() error" << std::endl;
         goto on_return;
     }
 
-    // 4) STUN/TURN 설정 초기화 (수정됨)
-    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, nullptr);
+    // 기본 IP를 "0.0.0.0"로 설정하여 stun_cfg.af 가 올바르게 설정되도록 함
+    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, "0.0.0.0");
 
-    // 5) 콜백 구조체 준비
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
     g_turn_callbacks.on_rx_data = &on_rx_data;
 
-    // 6) TURN 소켓 생성 시 콜백 등록
     status = pj_turn_sock_create(&stun_cfg,
                                  0,                 // flags
                                  PJ_TURN_TP_UDP,    // UDP
@@ -380,7 +377,6 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 7) TURN 할당
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
@@ -402,8 +398,8 @@ void turn_ack_receiver_thread()
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
-    // 8) 대기: 데이터 수신은 콜백으로 처리됨
-    while (true) {
+    // 종료 플래그가 set 될 때까지 대기
+    while (turn_running.load()) {
         pj_thread_sleep(10);  // 10ms
     }
 
@@ -416,9 +412,8 @@ on_return:
     pj_shutdown();
 }
 
-
 // ----------------------------
-//              main()
+// main()
 // ----------------------------
 int main() {
     try {
@@ -430,22 +425,21 @@ int main() {
 
         VideoStreamer streamer;
 
-        // TURN ACK 수신용 스레드
+        // TURN ACK 수신용 스레드 시작
         thread turn_thread(turn_ack_receiver_thread);
 
         atomic<bool> running(true);
-        // 여기서 client_stream() 함수를 실행
         thread client_thread(client_stream, ref(streamer), ref(pipe), ref(running));
 
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
-        // 종료 처리
+        // 스트리밍 종료
         running.store(false);
         client_thread.join();
 
-        // TURN 스레드 종료 (임시로 pthread_cancel 사용)
-        pthread_cancel(turn_thread.native_handle());
+        // TURN 스레드 종료 요청 후 join
+        turn_running.store(false);
         turn_thread.join();
     }
     catch (const exception& e) {
