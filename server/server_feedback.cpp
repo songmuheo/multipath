@@ -1,202 +1,189 @@
+// server_turn.cpp
 #include <iostream>
-#include <fstream>
-#include <cstring>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <chrono>
+#include <string>
 #include <atomic>
-#include <iomanip>
-#include <ctime>
-#include <thread>
-#include <filesystem>
-#include <mutex>
-#include "config.h"
+#include <pjlib.h>
+#include <pjlib-util.h>
+#include <pjnath.h>
+#include "common_turn_utils.h"
 
-using namespace std;
-namespace fs = std::filesystem;
+static std::atomic<bool> g_running{true};
 
-struct PacketHeader {
-    uint64_t timestamp_frame;
-    uint64_t timestamp_sending;
-    uint32_t sequence_number;
-};
-
-std::string client_relay_address = "";
-std::mutex relay_mutex;
-
-string create_timestamped_directory(const string& base_dir) {
-    auto now = chrono::system_clock::now();
-    time_t now_time = chrono::system_clock::to_time_t(now);
-    tm* local_time = localtime(&now_time);
-    char folder_name[100];
-    strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", local_time);
-    string full_path = base_dir + "/" + folder_name;
-    fs::create_directories(full_path);
-    return full_path;
-}
-
-void create_log_file(const char* logpath) {
-    ofstream logfile(logpath, ios::app);
-    logfile << "source_ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size,frame_type\n";
-    logfile.close();
-}
-
-string get_h264_frame_type(const uint8_t* data, size_t size) {
-    if (size < 5)
-        return "UNKNOWN";
-    for (size_t i = 0; i < size - 3; i++) {
-        if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01) {
-            if ((data[i+3] & 0x1F) == 5) return "I";
-        }
-        if (i < size - 4 && data[i] == 0x00 && data[i+1] == 0x00 &&
-            data[i+2] == 0x00 && data[i+3] == 0x01) {
-            if ((data[i+4] & 0x1F) == 1) return "P";
-        }
-    }
-    return "OTHER";
-}
-
-void log_packet_info(const char* logpath,
-                     const string& source_ip,
-                     uint32_t sequence_number,
-                     uint64_t timestamp_frame,
-                     uint64_t timestamp_sending,
-                     uint64_t received_time_us,
-                     uint64_t network_latency_us,
-                     size_t message_size,
-                     const string& frame_type)
+// 수신 콜백
+static void on_rx_data(pj_turn_sock *sock,
+                       void *user_data,
+                       unsigned int size,
+                       const pj_sockaddr_t *src_addr,
+                       unsigned int addr_len)
 {
-    ofstream logfile(logpath, ios::app);
-    logfile << source_ip << ","
-            << sequence_number << ","
-            << timestamp_frame << ","
-            << timestamp_sending << ","
-            << received_time_us << ","
-            << (network_latency_us / 1000.0) << ","
-            << message_size << ","
-            << frame_type << "\n";
-    logfile.close();
-}
+    if (size > 0) {
+        // 간단히 수신 데이터를 문자열로 보고 출력
+        std::string recv_str((char*)user_data, size);
+        std::cout << "[SERVER] Received data: " << recv_str << "\n";
 
-void send_ack(int sockfd, uint32_t sequence_number, uint64_t latency_us) {
-    std::lock_guard<std::mutex> lock(relay_mutex);
-    if (!client_relay_address.empty()) {
-        size_t colon_pos = client_relay_address.find(':');
-        if (colon_pos != std::string::npos) {
-            std::string ip = client_relay_address.substr(0, colon_pos);
-            std::string port_str = client_relay_address.substr(colon_pos + 1);
-            int port = std::stoi(port_str);
-            struct sockaddr_in relay_addr;
-            inet_pton(AF_INET, ip.c_str(), &relay_addr.sin_addr);
-            relay_addr.sin_family = AF_INET;
-            relay_addr.sin_port = htons(port);
-            std::string ack_msg = "ACK:" + std::to_string(sequence_number) + "," + std::to_string(latency_us / 1000.0);
-            if (sendto(sockfd, ack_msg.c_str(), ack_msg.size(), 0,
-                       (const struct sockaddr*)&relay_addr, sizeof(relay_addr)) < 0)
-            {
-                std::cerr << "ACK sending failed: " << strerror(errno) << std::endl;
-            }
-        } else {
-            std::cerr << "Invalid relay address format: " << client_relay_address << std::endl;
+        // 예: "ACK"를 보내거나, 혹은 "ACK: + recv_str" 등
+        std::string ack_str = "ACK from SERVER: " + recv_str;
+
+        // src_addr가 "클라이언트 relay 주소"임. 여기에 다시 전송
+        pj_status_t status = pj_turn_sock_sendto(sock,
+                                                 ack_str.data(),
+                                                 (pj_size_t)ack_str.size(),
+                                                 0,
+                                                 src_addr,
+                                                 addr_len);
+        if (status != PJ_SUCCESS) {
+            std::cerr << "[SERVER] Failed to send ACK via TURN\n";
         }
-    } else {
-        std::cerr << "Relay address not set, cannot send ACK" << std::endl;
     }
 }
 
-void receive_packets(int port, const char* log_filepath) {
-    int sockfd;
-    char buffer[BUFFER_SIZE];
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_len = sizeof(client_addr);
+// TURN 소켓 콜백 구조체
+static pj_turn_sock_cb g_turn_cb;
 
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        perror("socket creation failed");
-        exit(EXIT_FAILURE);
-    }
-    memset(&server_addr, 0, sizeof(server_addr));
-    memset(&client_addr, 0, sizeof(client_addr));
+int main()
+{
+    // ---------------------
+    // 1) PJLIB / pjnath 초기화
+    // ---------------------
+    pj_status_t status;
+    status = pj_init();                if (status != PJ_SUCCESS) { std::cerr << "pj_init() failed\n"; return 1; }
+    status = pjlib_util_init();        if (status != PJ_SUCCESS) { std::cerr << "pjlib_util_init() failed\n"; return 1; }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(port);
+    pj_caching_pool cp;
+    pj_caching_pool_init(&cp, NULL, 0);
 
-    if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("bind failed");
-        close(sockfd);
-        exit(EXIT_FAILURE);
+    pj_pool_t *pool = pj_pool_create(&cp.factory, "srv_pool", 4000, 4000, NULL);
+    if (!pool) {
+        std::cerr << "Failed to create pool\n";
+        return 1;
     }
 
-    std::cout << "Listening on port " << port << std::endl;
-    create_log_file(log_filepath);
+    pj_ioqueue_t *ioqueue = NULL;
+    status = pj_ioqueue_create(pool, 64, &ioqueue);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_ioqueue_create() error\n";
+        return 1;
+    }
 
-    while (true) {
-        ssize_t len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
-        if (len < 0) {
-            perror("recvfrom failed");
-            continue;
+    pj_timer_heap_t *timer_heap = NULL;
+    status = pj_timer_heap_create(pool, 100, &timer_heap);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_timer_heap_create() error\n";
+        return 1;
+    }
+
+    pj_stun_config stun_cfg;
+    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
+
+    // ---------------------
+    // 2) TURN 소켓 생성
+    // ---------------------
+    pj_turn_sock *turn_sock = NULL;
+
+    // 콜백 설정
+    pj_bzero(&g_turn_cb, sizeof(g_turn_cb));
+    // on_rx_data만 사용 (나머지는 필요시 추가)
+    g_turn_cb.on_rx_data = &on_rx_data;
+
+    // create turn sock
+    status = pj_turn_sock_create(&stun_cfg,
+                                 PJ_AF_INET,      // IPv4
+                                 PJ_TURN_TP_UDP,  // UDP transport
+                                 &g_turn_cb,
+                                 NULL,            // user_data
+                                 NULL,            // 프로락시 소켓?
+                                 &turn_sock);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_turn_sock_create() error\n";
+        return 1;
+    }
+
+    // ---------------------
+    // 3) TURN 서버에 Allocate
+    // ---------------------
+    // 서버도 ephemeral username 사용 가능(유효기간+식별자). 여기선 식별자 "server"로.
+    std::string user_str   = generate_turn_username("server", 300 /*유효 300초*/);
+    std::string pass_str   = compute_turn_password(user_str + std::string(":") + TURN_REALM,
+                                                   TURN_SECRET);
+
+    pj_stun_auth_cred creds;
+    memset(&creds, 0, sizeof(creds));
+    creds.type = PJ_STUN_AUTH_CRED_STATIC;
+    creds.data.static_cred.username = pj_str(const_cast<char*>(user_str.c_str()));
+    creds.data.static_cred.data     = pj_str(const_cast<char*>(pass_str.c_str()));
+    creds.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
+
+    pj_str_t srv_ip = pj_str(const_cast<char*>(TURN_SERVER_IP));
+
+    status = pj_turn_sock_alloc(turn_sock,
+                                &srv_ip,
+                                TURN_SERVER_PORT,
+                                NULL,   // (optional) local bound address
+                                &creds,
+                                NULL);  // user_data for on_state callback
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_turn_sock_alloc() error\n";
+        return 1;
+    }
+
+    // 4) 할당 완료까지 대기(비동기로 진행되므로, poll을 돌려야 함)
+    //    실제로는 on_state_changed 콜백 등에서 확인 가능. 여기서는 간단 폴링
+    bool allocated = false;
+    for(int i=0; i<100; i++){
+        pj_time_val delay = {0, 10}; // 10 msec
+        pj_ioqueue_poll(ioqueue, &delay);
+        pj_timer_heap_poll(timer_heap, NULL);
+
+        pj_turn_sock_info info;
+        pj_bzero(&info, sizeof(info));
+        pj_turn_sock_get_info(turn_sock, &info);
+
+        if (info.state == PJ_TURN_STATE_READY) {
+            allocated = true;
+            break;
         }
-
-        std::string data(buffer, len);
-        if (data.find("RELAY") == 0) {
-            // It's a control message
-            std::lock_guard<std::mutex> lock(relay_mutex);
-            size_t space_pos = data.find(' ');
-            if (space_pos != std::string::npos) {
-                client_relay_address = data.substr(space_pos + 1);
-                std::cout << "Received relay address: " << client_relay_address << std::endl;
-            } else {
-                std::cerr << "Invalid RELAY message: " << data << std::endl;
-            }
-        } else {
-            // It's a video packet
-            uint64_t received_time_us = chrono::duration_cast<chrono::microseconds>(
-                                        chrono::system_clock::now().time_since_epoch()).count();
-
-            char client_ip[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-
-            PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
-            uint64_t network_latency_us = received_time_us - header->timestamp_sending;
-
-            size_t header_size = sizeof(PacketHeader);
-            if (len > header_size) {
-                const uint8_t* h264_data = reinterpret_cast<const uint8_t*>(buffer + header_size);
-                size_t h264_size = len - header_size;
-                string frame_type = get_h264_frame_type(h264_data, h264_size);
-
-                log_packet_info(log_filepath,
-                                client_ip,
-                                header->sequence_number,
-                                header->timestamp_frame,
-                                header->timestamp_sending,
-                                received_time_us,
-                                network_latency_us,
-                                len,
-                                frame_type);
-
-                // Send ACK using relay address
-                send_ack(sockfd, header->sequence_number, network_latency_us);
-            } else {
-                std::cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
-            }
-        }
+        pj_thread_sleep(0,10);
     }
-    close(sockfd);
-}
 
-int main() {
-    string base_dir = FILEPATH_LOG;
-    string folder_path = create_timestamped_directory(base_dir);
-    string port1_log = folder_path + "/lg_log.csv";
-    string port2_log = folder_path + "/kt_log.csv";
+    if (!allocated) {
+        std::cerr << "[SERVER] TURN allocation not finished.\n";
+        return 1;
+    }
 
-    thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str());
-    thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str());
+    // 5) 할당된 relay 주소 확인
+    {
+        pj_turn_sock_info info;
+        pj_bzero(&info, sizeof(info));
+        pj_turn_sock_get_info(turn_sock, &info);
 
-    port1_thread.join();
-    port2_thread.join();
+        char ipstr[128];
+        pj_sockaddr_print(&info.relay_addr, ipstr, sizeof(ipstr), 0);
+        std::cout << "[SERVER] TURN relay allocated! Relay addr = " << ipstr << "\n"
+                  << "         Please give this address to the client so it can send data here.\n";
+    }
 
+    // ---------------------
+    // 6) 메인 루프: 데이터 수신/ACK 전송
+    // ---------------------
+    std::cout << "[SERVER] Entering loop. Press Ctrl+C to stop.\n";
+    while (g_running) {
+        pj_time_val delay = {0, 10}; // 10 msec
+        pj_ioqueue_poll(ioqueue, &delay);
+        pj_timer_heap_poll(timer_heap, NULL);
+
+        // 간단히 Sleep
+        pj_thread_sleep(0,10);
+    }
+
+    // 종료
+    if (turn_sock) {
+        pj_turn_sock_destroy(turn_sock);
+        turn_sock = NULL;
+    }
+    pj_timer_heap_destroy(timer_heap);
+    pj_ioqueue_destroy(ioqueue);
+    pj_pool_release(pool);
+    pj_caching_pool_destroy(&cp);
+    pj_shutdown();
     return 0;
 }
