@@ -426,7 +426,7 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
+    status = pj_sockaddr_parse(PJ_AF_INET, CLIENT_TURN_PORT, &ip_str, &peer_addr);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_sockaddr_parse() error" << std::endl;
         goto on_return;
