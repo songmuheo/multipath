@@ -350,6 +350,8 @@ atomic<bool> turn_running{true};
 
 void turn_ack_receiver_thread()
 {
+    std::string relay_msg;
+    pj_str_t msg;
     pj_status_t status;
     pj_caching_pool cp;
     pj_pool_t *pool = nullptr;
@@ -456,14 +458,16 @@ void turn_ack_receiver_thread()
     // 릴레이 주소 얻기 및 서버에 전송
     pj_str_t relay_ip;
     pj_uint16_t relay_port;
-    status = pj_turn_sock_get_relay_info(turn_sock, &relay_ip, &relay_port);
+    status = pj_turn_sock_get_info(turn_sock, &relay_ip, &relay_port);
     if (status != PJ_SUCCESS) {
         std::cerr << "Failed to get relay info" << std::endl;
         goto on_return;
     }
+    relay_ip = info.relay_addr;
+    relay_port = info.relay_port;
     std::string relay_msg = "RELAY " + std::string(relay_ip.ptr) + ":" + std::to_string(relay_port);
     pj_str_t msg = pj_str(const_cast<char*>(relay_msg.c_str()));
-    status = pj_turn_sock_sendto(turn_sock, &msg, &peer_addr);
+    status = pj_turn_sock_sendto(turn_sock, (const pj_uint8_t*)msg.ptr, msg.slen, &peer_addr, peer_addr.addr_len);
     if (status != PJ_SUCCESS) {
         std::cerr << "Failed to send relay address to server" << std::endl;
     }
