@@ -326,7 +326,6 @@ static void on_rx_data(pj_turn_sock *sock,
 // 콜백 함수들을 모아놓은 구조체
 static pj_turn_sock_cb g_turn_callbacks;
 
-// TURN 스레드 예시
 void turn_ack_receiver_thread()
 {
     pj_status_t    status;
@@ -361,9 +360,8 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 4) STUN/TURN 설정 초기화
-    // <== 수정: 두 번째 인자로 pool을 전달!
-    pj_stun_config_init(&stun_cfg, pool, PJ_AF_INET, ioqueue, nullptr);
+    // 4) STUN/TURN 설정 초기화 (수정됨)
+    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, nullptr);
 
     // 5) 콜백 구조체 준비
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
@@ -404,7 +402,7 @@ void turn_ack_receiver_thread()
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
-    // 8) 대기: 데이터 수신은 콜백을 통해 처리됨
+    // 8) 대기: 데이터 수신은 콜백으로 처리됨
     while (true) {
         pj_thread_sleep(10);  // 10ms
     }
