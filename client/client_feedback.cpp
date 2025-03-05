@@ -347,9 +347,10 @@ void turn_ack_receiver_thread()
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
-    // 변수들을 최상단에 선언하여 goto 문제 해결
+    // 모든 관련 변수들을 함수 시작 시 선언
     std::string ephemeral_username;
     std::string ephemeral_password;
+    pj_str_t ip_str = pj_str(const_cast<char*>(SERVER_IP));
     pj_sockaddr peer_addr;
 
     status = pj_init();
@@ -424,14 +425,12 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // SERVER_IP를 pj_str_t로 변환하여 pj_sockaddr_parse에 전달 (포트 0 사용)
-    pj_str_t ip_str = pj_str(const_cast<char*>(SERVER_IP));
     status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_sockaddr_parse() error" << std::endl;
         goto on_return;
     }
-    // index 0과 함께 peer_addr, 크기를 전달
+
     status = pj_turn_sock_set_perm(turn_sock, 0, &peer_addr, sizeof(peer_addr));
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
@@ -455,8 +454,6 @@ on_return:
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
-
-
 
 // ----------------------------
 // main()
