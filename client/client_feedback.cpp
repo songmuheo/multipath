@@ -329,22 +329,34 @@ atomic<bool> turn_running{true};
 
 void turn_ack_receiver_thread()
 {
-    pj_status_t    status;
+void turn_ack_receiver_thread()
+{
+    pj_status_t status;
     pj_caching_pool cp;
-    pj_pool_t      *pool    = nullptr;
-    pj_ioqueue_t   *ioqueue = nullptr;
-    pj_stun_config  stun_cfg;
+    pj_pool_t *pool = nullptr;
+    pj_ioqueue_t *ioqueue = nullptr;
+    pj_stun_config stun_cfg;
     pj_timer_heap_t *timer_heap = nullptr;  // 타이머 힙 변수 추가
 
-    pj_turn_sock   *turn_sock = nullptr;
-    pj_str_t        turn_server;
+    pj_turn_sock *turn_sock = nullptr;
+    pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
+    // PJLIB 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_init() error" << std::endl;
         return;
     }
+    
+    // **pjlib_util_init() 호출 추가**
+    status = pjlib_util_init();
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pjlib_util_init() error" << std::endl;
+        return;
+    }
+
+    pj_caching_pool_init(&cp, nullptr, 0);
     pj_caching_pool_init(&cp, nullptr, 0);
 
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
