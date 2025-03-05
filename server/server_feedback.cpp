@@ -10,6 +10,7 @@
 #include <ctime>
 #include <thread>
 #include <filesystem>
+#include <mutex>
 #include "config.h"
 
 using namespace std;
@@ -20,6 +21,9 @@ struct PacketHeader {
     uint64_t timestamp_sending;
     uint32_t sequence_number;
 };
+
+std::string client_relay_address = "";
+std::mutex relay_mutex;
 
 string create_timestamped_directory(const string& base_dir) {
     auto now = chrono::system_clock::now();
@@ -75,21 +79,36 @@ void log_packet_info(const char* logpath,
     logfile.close();
 }
 
-void send_ack(int sockfd, const sockaddr_in &client_addr,
-              uint32_t sequence_number, uint64_t latency_us)
-{
-    string ack_msg = "ACK:" + to_string(sequence_number) + "," + to_string(latency_us / 1000.0);
-    if (sendto(sockfd, ack_msg.c_str(), ack_msg.size(), 0,
-               (const struct sockaddr*)&client_addr, sizeof(client_addr)) < 0)
-    {
-        cerr << "ACK 송신 실패: " << strerror(errno) << endl;
+void send_ack(int sockfd, uint32_t sequence_number, uint64_t latency_us) {
+    std::lock_guard<std::mutex> lock(relay_mutex);
+    if (!client_relay_address.empty()) {
+        size_t colon_pos = client_relay_address.find(':');
+        if (colon_pos != std::string::npos) {
+            std::string ip = client_relay_address.substr(0, colon_pos);
+            std::string port_str = client_relay_address.substr(colon_pos + 1);
+            int port = std::stoi(port_str);
+            struct sockaddr_in relay_addr;
+            inet_pton(AF_INET, ip.c_str(), &relay_addr.sin_addr);
+            relay_addr.sin_family = AF_INET;
+            relay_addr.sin_port = htons(port);
+            std::string ack_msg = "ACK:" + std::to_string(sequence_number) + "," + std::to_string(latency_us / 1000.0);
+            if (sendto(sockfd, ack_msg.c_str(), ack_msg.size(), 0,
+                       (const struct sockaddr*)&relay_addr, sizeof(relay_addr)) < 0)
+            {
+                std::cerr << "ACK sending failed: " << strerror(errno) << std::endl;
+            }
+        } else {
+            std::cerr << "Invalid relay address format: " << client_relay_address << std::endl;
+        }
+    } else {
+        std::cerr << "Relay address not set, cannot send ACK" << std::endl;
     }
 }
 
 void receive_packets(int port, const char* log_filepath) {
     int sockfd;
     char buffer[BUFFER_SIZE];
-    sockaddr_in server_addr, client_addr;
+    struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -109,7 +128,7 @@ void receive_packets(int port, const char* log_filepath) {
         exit(EXIT_FAILURE);
     }
 
-    cout << "Listening on port " << port << endl;
+    std::cout << "Listening on port " << port << std::endl;
     create_log_file(log_filepath);
 
     while (true) {
@@ -119,36 +138,49 @@ void receive_packets(int port, const char* log_filepath) {
             continue;
         }
 
-        uint64_t received_time_us = chrono::duration_cast<chrono::microseconds>(
+        std::string data(buffer, len);
+        if (data.find("RELAY") == 0) {
+            // It's a control message
+            std::lock_guard<std::mutex> lock(relay_mutex);
+            size_t space_pos = data.find(' ');
+            if (space_pos != std::string::npos) {
+                client_relay_address = data.substr(space_pos + 1);
+                std::cout << "Received relay address: " << client_relay_address << std::endl;
+            } else {
+                std::cerr << "Invalid RELAY message: " << data << std::endl;
+            }
+        } else {
+            // It's a video packet
+            uint64_t received_time_us = chrono::duration_cast<chrono::microseconds>(
                                         chrono::system_clock::now().time_since_epoch()).count();
 
-        char client_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+            char client_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
 
-        PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
-        uint64_t network_latency_us = received_time_us - header->timestamp_sending;
+            PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
+            uint64_t network_latency_us = received_time_us - header->timestamp_sending;
 
-        size_t header_size = sizeof(PacketHeader);
-        if (len > header_size) {
-            const uint8_t* h264_data = reinterpret_cast<const uint8_t*>(buffer + header_size);
-            size_t h264_size = len - header_size;
-            string frame_type = get_h264_frame_type(h264_data, h264_size);
+            size_t header_size = sizeof(PacketHeader);
+            if (len > header_size) {
+                const uint8_t* h264_data = reinterpret_cast<const uint8_t*>(buffer + header_size);
+                size_t h264_size = len - header_size;
+                string frame_type = get_h264_frame_type(h264_data, h264_size);
 
-            log_packet_info(log_filepath,
-                            client_ip,
-                            header->sequence_number,
-                            header->timestamp_frame,
-                            header->timestamp_sending,
-                            received_time_us,
-                            network_latency_us,
-                            len,
-                            frame_type);
+                log_packet_info(log_filepath,
+                                client_ip,
+                                header->sequence_number,
+                                header->timestamp_frame,
+                                header->timestamp_sending,
+                                received_time_us,
+                                network_latency_us,
+                                len,
+                                frame_type);
 
-            // 실제 패킷 송신자 주소(client_addr)로 ACK 전송
-            send_ack(sockfd, client_addr, header->sequence_number, network_latency_us);
-        }
-        else {
-            cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
+                // Send ACK using relay address
+                send_ack(sockfd, header->sequence_number, network_latency_us);
+            } else {
+                std::cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
+            }
         }
     }
     close(sockfd);

@@ -323,7 +323,22 @@ static void on_rx_data(pj_turn_sock *sock,
                        unsigned int addr_len)
 {
     if (size > 0) {
-        std::cout << "[TURN] Received data of size: " << size << std::endl;
+        char buffer[1024];
+        pj_sockaddr_print(src_addr, buffer, sizeof(buffer), 3);
+        std::cout << "[TURN] Received data from " << buffer << ", size: " << size << std::endl;
+        std::string msg(buffer, size);
+        if (msg.substr(0, 4) == "ACK:") {
+            size_t comma_pos = msg.find(',');
+            if (comma_pos != std::string::npos) {
+                std::string seq_str = msg.substr(4, comma_pos - 4);
+                std::string latency_str = msg.substr(comma_pos + 1);
+                uint32_t sequence_number = std::stoi(seq_str);
+                double latency_ms = std::stod(latency_str);
+                std::cout << "Received ACK for sequence number " << sequence_number << ", latency " << latency_ms << " ms" << std::endl;
+            }
+        } else {
+            std::cout << "Received unknown data: " << msg << std::endl;
+        }
     }
 }
 
@@ -426,7 +441,7 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    status = pj_sockaddr_parse(PJ_AF_INET, CLIENT_TURN_PORT, &ip_str, &peer_addr);
+    status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_sockaddr_parse() error" << std::endl;
         goto on_return;
@@ -438,14 +453,24 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
+    // 릴레이 주소 얻기 및 서버에 전송
+    pj_str_t relay_ip;
+    pj_uint16_t relay_port;
+    status = pj_turn_sock_get_relay_info(turn_sock, &relay_ip, &relay_port);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "Failed to get relay info" << std::endl;
+        goto on_return;
+    }
+    std::string relay_msg = "RELAY " + std::string(relay_ip.ptr) + ":" + std::to_string(relay_port);
+    pj_str_t msg = pj_str(const_cast<char*>(relay_msg.c_str()));
+    status = pj_turn_sock_sendto(turn_sock, &msg, &peer_addr);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "Failed to send relay address to server" << std::endl;
+    }
+
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
     while (turn_running.load()) {
-        // pj_thread_sleep(10);  // 10ms
-        pj_time_val timeout;
-        timeout.sec = 0;
-        timeout.msec = 10;  // 10ms
-        // ioqueue를 통해 들어온 이벤트들을 처리합니다.
-        pj_ioqueue_poll(ioqueue, &timeout);
+        pj_thread_sleep(10);  // 10ms
     }
 
 on_return:
