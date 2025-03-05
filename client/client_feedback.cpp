@@ -33,6 +33,9 @@ extern "C" {
 using namespace std;
 namespace fs = std::filesystem;
 
+// ----------------------------
+//     영상 관련 구조체/클래스
+// ----------------------------
 struct PacketHeader {
     uint64_t timestamp_frame;
     uint64_t timestamp_sending;
@@ -287,51 +290,75 @@ private:
     string logs_folder;
 };
 
-// TURN ACK 수신을 위한 스레드 함수 (pjnath/pjlib 사용)
-void turn_ack_receiver_thread() {
+// ----------------------------
+//    TURN ACK 수신 스레드 함수
+// ----------------------------
+void turn_ack_receiver_thread() 
+{
     pj_status_t status;
-    pj_caching_pool cp;
-    pj_pool_t *pool;
-    pj_turn_sock *turn_sock = nullptr;
-    pj_turn_srv turn_srv;
-    pj_sockaddr turn_srv_addr;
 
-    // pjlib 초기화
+    // 1. pjlib 및 메모리 풀 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
         cerr << "pj_init error" << endl;
         return;
     }
-    pj_caching_pool_init(&cp, NULL, 0);
-    pool = pj_pool_create(&cp.factory, "turn_ack", 512, 512, NULL);
 
-    // TURN 서버 주소 설정
-    pj_sockaddr_init(&turn_srv_addr, PJ_AF_INET, TURN_SERVER_IP, TURN_SERVER_PORT);
-    pj_bzero(&turn_srv, sizeof(turn_srv));
-    turn_srv.transport = PJ_TURN_TP_UDP;
-    turn_srv.addr = turn_srv_addr;
-    // 사용자 인증 정보 (실제 환경에서는 lt-cred-mech 사용)
-    pj_str_t username = pj_str(const_cast<char*>(TURN_USERNAME));
-    pj_str_t password = pj_str(const_cast<char*>(TURN_PASSWORD));
-    turn_srv.username = username;
-    turn_srv.password = password;
-    // realm 등 필요한 추가 필드도 설정할 수 있음
+    pj_caching_pool cp;
+    pj_caching_pool_init(&cp, nullptr, 0);
 
-    // TURN 소켓 생성
-    status = pj_turn_sock_create(pool, &turn_srv, PJ_TURN_TP_UDP, 0, &turn_sock);
+    // STUN/TURN 공용 설정 구조체
+    pj_stun_config stun_cfg;
+    pj_stun_config_init(&stun_cfg, &cp.factory, 0, &cp.sock_factory, 0);
+
+    // 메모리 풀 생성
+    pj_pool_t *pool = pj_pool_create(&cp.factory, "turn_ack", 512, 512, nullptr);
+    if (!pool) {
+        cerr << "Failed to create pool" << endl;
+        goto on_return;
+    }
+
+    // 2. TURN 소켓 설정 구조체 초기화
+    pj_turn_sock_cfg cfg;
+    pj_turn_sock_cfg_default(&cfg);
+    cfg.stun_cfg = &stun_cfg;
+
+    // TURN 서버 정보 세팅
+    cfg.server = pj_str(const_cast<char*>(TURN_SERVER_IP));  // 예: "121.128.220.205"
+    cfg.port   = TURN_SERVER_PORT;                           // 예: 3478
+    cfg.turn_transport = PJ_TURN_TP_UDP;
+
+    // 사용자 인증 정보 (static credential)
+    cfg.auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
+    cfg.auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
+    cfg.auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
+    cfg.auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
+
+    // 3. TURN 소켓 생성
+    pj_turn_sock *turn_sock = nullptr;
+    status = pj_turn_sock_create(&cfg, nullptr, nullptr, &turn_sock);
     if (status != PJ_SUCCESS) {
         pj_perror(3, "pj_turn_sock_create", status, "Error creating TURN socket");
         goto on_return;
     }
 
-    // TURN 할당 시작 (릴레이 주소 할당)
-    status = pj_turn_sock_start(turn_sock, pool, NULL, NULL, NULL);
+    // 4. TURN 소켓에 할당(릴레이 주소 확보)
+    status = pj_turn_sock_alloc(turn_sock, pool);
+    if (status != PJ_SUCCESS) {
+        pj_perror(3, "pj_turn_sock_alloc", status, "Error allocating TURN socket");
+        goto on_return;
+    }
+
+    // 5. TURN 소켓 시작
+    status = pj_turn_sock_start(turn_sock, 0, 0);
     if (status != PJ_SUCCESS) {
         pj_perror(3, "pj_turn_sock_start", status, "Error starting TURN socket");
         goto on_return;
     }
 
     cout << "TURN ACK receiver started. Waiting for ACK messages..." << endl;
+
+    // 6. 무한 루프: TURN으로부터 데이터 수신
     while (true) {
         char ack_buffer[1024];
         pj_turn_pkt pkt;
@@ -344,17 +371,26 @@ void turn_ack_receiver_thread() {
             ack_buffer[pkt.data_len] = '\0';
             cout << "Received ACK via TURN: " << ack_buffer << endl;
         }
-        pj_thread_sleep(10);
+        pj_thread_sleep(10); // 10ms 슬립 (과도한 CPU 사용 방지)
     }
 
 on_return:
-    if (turn_sock)
-        pj_turn_sock_close(turn_sock);
-    pj_pool_release(pool);
+    // 종료 처리
+    if (pool) {
+        // turn_sock이 살아 있다면 안전하게 종료
+        if (turn_sock) {
+            pj_turn_sock_shutdown(turn_sock, PJ_TRUE);
+            pj_turn_sock_destroy(turn_sock);
+        }
+        pj_pool_release(pool);
+    }
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
 
+// ----------------------------
+//    메인 스트리밍 로직 스레드
+// ----------------------------
 void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
     while (running.load()) {
         rs2::frameset frames = pipe.wait_for_frames();
@@ -367,6 +403,9 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
+// ----------------------------
+//              main()
+// ----------------------------
 int main() {
     try {
         // RealSense 파이프라인 설정
@@ -386,10 +425,12 @@ int main() {
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
+        // 종료 처리
         running.store(false);
         client_thread.join();
 
-        // TURN 스레드는 무한 루프이므로 프로그램 종료 시 강제 종료 필요 (실제 구현에서는 종료 플래그 사용)
+        // TURN 스레드는 무한 루프이므로, 데모용으로 pthread_cancel() 사용
+        // 실제 제품 코드라면, 안전하게 종료할 수 있는 별도 신호/플래그로 제어하는 방식을 권장
         pthread_cancel(turn_thread.native_handle());
         turn_thread.join();
     }
