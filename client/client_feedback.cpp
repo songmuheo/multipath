@@ -355,7 +355,6 @@ void turn_ack_receiver_thread()
     }
 
     pj_caching_pool_init(&cp, nullptr, 0);
-    pj_caching_pool_init(&cp, nullptr, 0);
 
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
     if (!pool) {
@@ -376,6 +375,8 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
+    // stun_cfg 구조체를 0으로 초기화 (매우 중요!)
+    pj_bzero(&stun_cfg, sizeof(stun_cfg));
     // 타이머 힙을 이용하여 STUN/TURN 설정 초기화
     pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
 
