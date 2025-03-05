@@ -404,14 +404,16 @@ void turn_ack_receiver_thread()
 
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
 
-    // 동적 자격증명 생성
+    // 동적 자격증명 생성 (username은 "expiration:identifier")
     ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    // **realm 포함하여 HMAC 계산**
+    // password는 "ephemeral_username:TURN_REALM"을 기반으로 HMAC 계산
     ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
-    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
-    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    // long-term 인증 방식 사용
+    auth_cred.type = PJ_STUN_AUTH_CRED_LONG_TERM;
+    auth_cred.data.long_term.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
+    auth_cred.data.long_term.realm = pj_str(const_cast<char*>(TURN_REALM));
+    auth_cred.data.long_term.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    auth_cred.data.long_term.data_type = PJ_STUN_PASSWD_PLAIN;
 
     status = pj_turn_sock_alloc(
         turn_sock,
