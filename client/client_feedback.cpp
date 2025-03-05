@@ -310,7 +310,7 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
-// 예시) 콜백 함수
+// 콜백 함수
 static void on_rx_data(pj_turn_sock *sock,
                        void *user_data,
                        unsigned int size,
@@ -323,7 +323,7 @@ static void on_rx_data(pj_turn_sock *sock,
 }
 
 
-// 예시) 콜백 함수들을 모아놓은 구조체
+// 콜백 함수들을 모아놓은 구조체
 static pj_turn_sock_cb g_turn_callbacks;
 
 // TURN 스레드 예시
@@ -362,19 +362,19 @@ void turn_ack_receiver_thread()
     }
 
     // 4) STUN/TURN 설정 초기화
-    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, nullptr);
+    // <== 수정: 두 번째 인자로 pool을 전달!
+    pj_stun_config_init(&stun_cfg, pool, PJ_AF_INET, ioqueue, nullptr);
 
     // 5) 콜백 구조체 준비
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
     g_turn_callbacks.on_rx_data = &on_rx_data;
-    // 필요하다면 on_state_changed, on_alloc_success 등 다른 콜백도 설정 가능
 
     // 6) TURN 소켓 생성 시 콜백 등록
     status = pj_turn_sock_create(&stun_cfg,
                                  0,                 // flags
                                  PJ_TURN_TP_UDP,    // UDP
                                  &g_turn_callbacks, // 콜백 구조체
-                                 nullptr,           // user_data(필요하면 사용)
+                                 nullptr,           // user_data
                                  nullptr,           // 소켓 설정
                                  &turn_sock);
     if (status != PJ_SUCCESS) {
@@ -404,8 +404,7 @@ void turn_ack_receiver_thread()
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
-    // 8) 여기서부터는 콜백으로만 데이터가 들어옴
-    //    이 스레드를 단순 대기 상태로 둡니다.
+    // 8) 대기: 데이터 수신은 콜백을 통해 처리됨
     while (true) {
         pj_thread_sleep(10);  // 10ms
     }
