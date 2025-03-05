@@ -334,9 +334,9 @@ void turn_ack_receiver_thread()
     pj_pool_t      *pool    = nullptr;
     pj_ioqueue_t   *ioqueue = nullptr;
     pj_stun_config  stun_cfg;
+    pj_timer_heap_t *timer_heap = nullptr;  // 타이머 힙 변수 추가
 
     pj_turn_sock   *turn_sock = nullptr;
-
     pj_str_t        turn_server;
     pj_stun_auth_cred auth_cred;
 
@@ -359,8 +359,15 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 기본 IP를 "0.0.0.0"로 설정하여 stun_cfg.af 가 올바르게 설정되도록 함
-    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, "0.0.0.0");
+    // 타이머 힙 생성 (예: 최대 128개의 타이머)
+    status = pj_timer_heap_create(pool, 128, &timer_heap);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_timer_heap_create() error" << std::endl;
+        goto on_return;
+    }
+
+    // 타이머 힙을 이용하여 STUN/TURN 설정 초기화
+    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
 
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
     g_turn_callbacks.on_rx_data = &on_rx_data;
@@ -398,7 +405,6 @@ void turn_ack_receiver_thread()
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
-    // 종료 플래그가 set 될 때까지 대기
     while (turn_running.load()) {
         pj_thread_sleep(10);  // 10ms
     }
@@ -408,9 +414,14 @@ on_return:
         pj_turn_sock_destroy(turn_sock);
         turn_sock = nullptr;
     }
+    if (timer_heap) {
+        pj_timer_heap_destroy(timer_heap);
+        timer_heap = nullptr;
+    }
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
+
 
 // ----------------------------
 // main()
