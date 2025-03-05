@@ -310,111 +310,107 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
-// ----------------------------
-//    TURN ACK 수신 스레드 함수
-// ----------------------------
+// 예시) 콜백 함수
+static void on_rx_data(pj_turn_sock *sock,
+                       void *user_data,
+                       void *pkt,
+                       pj_size_t size,
+                       const pj_sockaddr_t *src_addr,
+                       int addr_len)
+{
+    // pkt ~ size 범위가 실제 수신 데이터
+    if (size > 0) {
+        // 문자열이라고 가정하면:
+        std::string data(reinterpret_cast<char*>(pkt), size);
+        std::cout << "[TURN] Received via callback: " << data << std::endl;
+    }
+}
+
+// 예시) 콜백 함수들을 모아놓은 구조체
+static pj_turn_sock_cb g_turn_callbacks;
+
+// TURN 스레드 예시
 void turn_ack_receiver_thread()
 {
-    pj_status_t status;
-
-    // ------- [1] 모든 변수 선행 선언 ------
+    pj_status_t    status;
     pj_caching_pool cp;
-    pj_pool_t     *pool       = nullptr;
-    pj_ioqueue_t  *ioqueue    = nullptr;
-    pj_stun_config stun_cfg;
-    pj_turn_sock  *turn_sock  = nullptr;
+    pj_pool_t      *pool       = nullptr;
+    pj_ioqueue_t   *ioqueue    = nullptr;
+    pj_stun_config  stun_cfg;
+    pj_turn_sock   *turn_sock  = nullptr;
 
-    // TURN 서버 / 인증용
-    pj_str_t turn_server;
+    pj_str_t        turn_server;
     pj_stun_auth_cred auth_cred;
 
-    // PJ 초기화
+    // 1) PJ 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
-        cerr << "pj_init() error" << endl;
+        std::cerr << "pj_init() error" << std::endl;
         return;
     }
-
     pj_caching_pool_init(&cp, nullptr, 0);
 
-    // ------- [2] 메모리 풀 생성 ------
+    // 2) 메모리 풀 생성
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
     if (!pool) {
-        cerr << "Failed to create pool" << endl;
+        std::cerr << "Failed to create pool" << std::endl;
         goto on_return;
     }
 
-    // ------- [3] ioqueue 생성 ------
+    // 3) ioqueue 생성
     status = pj_ioqueue_create(pool, 64, &ioqueue);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_ioqueue_create() error" << endl;
+        std::cerr << "pj_ioqueue_create() error" << std::endl;
         goto on_return;
     }
 
-    // ------- [4] STUN/TURN 설정 초기화 ------
+    // 4) STUN/TURN 설정 초기화
     pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, nullptr);
 
-    // ------- [5] TURN 소켓 생성 ------
+    // 5) 콜백 구조체 준비
+    pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
+    g_turn_callbacks.on_rx_data = &on_rx_data;
+    // 필요하다면 on_state_changed, on_alloc_success 등 다른 콜백도 설정 가능
+
+    // 6) TURN 소켓 생성 시 콜백 등록
     status = pj_turn_sock_create(&stun_cfg,
-                                 0,                // flag=0 (기본값)
-                                 PJ_TURN_TP_UDP,   // 전송방식 (UDP)
-                                 nullptr,          // 콜백
-                                 nullptr,          // 사용자 데이터
-                                 nullptr,          // 소켓 설정
+                                 0,                 // flags
+                                 PJ_TURN_TP_UDP,    // UDP
+                                 &g_turn_callbacks, // 콜백 구조체
+                                 nullptr,           // user_data(필요하면 사용)
+                                 nullptr,           // 소켓 설정
                                  &turn_sock);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_create() error" << endl;
+        std::cerr << "pj_turn_sock_create() error" << std::endl;
         goto on_return;
     }
 
-    // ------- [6] TURN 서버 주소 & 인증 정보 ------
+    // 7) TURN 할당
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-    auth_cred.type                           = PJ_STUN_AUTH_CRED_STATIC;
-    auth_cred.data.static_cred.username      = pj_str(const_cast<char*>(TURN_USERNAME));
-    auth_cred.data.static_cred.data_type     = PJ_STUN_PASSWD_PLAIN;
-    auth_cred.data.static_cred.data          = pj_str(const_cast<char*>(TURN_PASSWORD));
+    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
+    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
+    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
 
-    // ------- [7] TURN 할당 요청 (Relay 주소)
-    status = pj_turn_sock_alloc(turn_sock,
-                                &turn_server,
-                                TURN_SERVER_PORT,
-                                nullptr,  // DNS Resolver
-                                &auth_cred,
-                                nullptr   // 추가 파라미터
-                                );
+    status = pj_turn_sock_alloc(
+        turn_sock,
+        &turn_server,
+        TURN_SERVER_PORT,
+        nullptr,     // DNS Resolver
+        &auth_cred,
+        nullptr      // 추가 파라미터
+    );
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_alloc() error" << endl;
+        std::cerr << "pj_turn_sock_alloc() error" << std::endl;
         goto on_return;
     }
 
-    cout << "TURN ACK receiver started. Waiting for ACK messages..." << endl;
+    std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
-    // ------- [8] 무한 루프 : TURN 데이터 수신 ------
+    // 8) 여기서부터는 콜백으로만 데이터가 들어옴
+    //    이 스레드를 단순 대기 상태로 둡니다.
     while (true) {
-        char buffer[1024];
-        pj_size_t buffer_len = sizeof(buffer);
-        pj_sockaddr src_addr;
-        pj_size_t src_addr_len = sizeof(src_addr);
-
-        // 버전에 따라 존재하는 수신 함수 확인 (아래 예: pj_turn_sock_recv_msg)
-        status = pj_turn_sock_recv_msg(turn_sock,
-                                    buffer,
-                                    &buffer_len,
-                                    &src_addr,
-                                    &src_addr_len);
-        if (status == PJ_SUCCESS && buffer_len > 0) {
-            // 수신된 실제 데이터 길이는 buffer_len
-            // 문자열이라면 '\0' 처리
-            if (buffer_len < sizeof(buffer)) {
-                buffer[buffer_len] = '\0';
-                cout << "[TURN] Received: " << buffer << endl;
-            } else {
-                // 받은 데이터가 꽉 찬 경우 (널문자 없이)
-                cout << "[TURN] Received (size=" << buffer_len << ")" << endl;
-            }
-        }
-
-        pj_thread_sleep(10);
+        pj_thread_sleep(10);  // 10ms
     }
 
 on_return:
@@ -425,6 +421,7 @@ on_return:
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
+
 
 // ----------------------------
 //              main()
