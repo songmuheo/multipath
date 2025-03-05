@@ -440,7 +440,12 @@ void turn_ack_receiver_thread()
 
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
     while (turn_running.load()) {
-        pj_thread_sleep(10);  // 10ms
+        // pj_thread_sleep(10);  // 10ms
+        pj_time_val timeout;
+        timeout.sec = 0;
+        timeout.msec = 10;  // 10ms
+        // ioqueue를 통해 들어온 이벤트들을 처리합니다.
+        pj_ioqueue_poll(ioqueue, &timeout);
     }
 
 on_return:
