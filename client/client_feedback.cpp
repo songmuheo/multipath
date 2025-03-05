@@ -5,7 +5,7 @@
 #include <pjlib.h>
 #include <pjlib-util.h>
 #include <pjnath.h>
-#include "common_turn_utils.h"
+#include "config.h"
 
 static std::atomic<bool> g_running{true};
 
