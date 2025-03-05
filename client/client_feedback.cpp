@@ -329,8 +329,6 @@ atomic<bool> turn_running{true};
 
 void turn_ack_receiver_thread()
 {
-void turn_ack_receiver_thread()
-{
     pj_status_t status;
     pj_caching_pool cp;
     pj_pool_t *pool = nullptr;
