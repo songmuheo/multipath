@@ -293,11 +293,10 @@ private:
 // ----------------------------
 //    TURN ACK 수신 스레드 함수
 // ----------------------------
-void turn_ack_receiver_thread() 
-{
+void turn_ack_receiver_thread() {
     pj_status_t status;
 
-    // 1. pjlib 및 메모리 풀 초기화
+    // 1. PJLIB 및 메모리 풀 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
         cerr << "pj_init error" << endl;
@@ -307,86 +306,76 @@ void turn_ack_receiver_thread()
     pj_caching_pool cp;
     pj_caching_pool_init(&cp, nullptr, 0);
 
-    // STUN/TURN 공용 설정 구조체
+    // 2. STUN/TURN 공용 설정 구조체 초기화
     pj_stun_config stun_cfg;
-    pj_stun_config_init(&stun_cfg, &cp.factory, 0, &cp.sock_factory, 0);
+    pj_ioqueue_t *ioqueue;
+    pj_thread_t *thread;
 
-    // 메모리 풀 생성
-    pj_pool_t *pool = pj_pool_create(&cp.factory, "turn_ack", 512, 512, nullptr);
-    if (!pool) {
-        cerr << "Failed to create pool" << endl;
+    // 2-1. IOQueue 생성
+    status = pj_ioqueue_create(&cp.factory, 64, &ioqueue);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_ioqueue_create error" << endl;
         goto on_return;
     }
 
-    // 2. TURN 소켓 설정 구조체 초기화
-    pj_turn_sock_cfg cfg;
-    pj_turn_sock_cfg_default(&cfg);
-    cfg.stun_cfg = &stun_cfg;
+    // 2-2. STUN 설정 초기화
+    pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, 0);
 
-    // TURN 서버 정보 세팅
-    cfg.server = pj_str(const_cast<char*>(TURN_SERVER_IP));  // 예: "121.128.220.205"
-    cfg.port   = TURN_SERVER_PORT;                           // 예: 3478
-    cfg.turn_transport = PJ_TURN_TP_UDP;
-
-    // 사용자 인증 정보 (static credential)
-    cfg.auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    cfg.auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
-    cfg.auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    cfg.auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
+    // 2-3. 스레드 생성 (TURN 소켓이 I/O 이벤트를 받을 수 있도록 설정)
+    status = pj_thread_create(pool, "turn_thread", turn_ioqueue_callback, nullptr, 0, 0, &thread);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_thread_create error" << endl;
+        goto on_return;
+    }
 
     // 3. TURN 소켓 생성
     pj_turn_sock *turn_sock = nullptr;
-    status = pj_turn_sock_create(&cfg, nullptr, nullptr, &turn_sock);
+    status = pj_turn_sock_create(&stun_cfg, 0, PJ_TURN_TP_UDP, nullptr, nullptr, nullptr, &turn_sock);
     if (status != PJ_SUCCESS) {
-        pj_perror(3, "pj_turn_sock_create", status, "Error creating TURN socket");
+        cerr << "pj_turn_sock_create error" << endl;
         goto on_return;
     }
 
-    // 4. TURN 소켓에 할당(릴레이 주소 확보)
-    status = pj_turn_sock_alloc(turn_sock, pool);
-    if (status != PJ_SUCCESS) {
-        pj_perror(3, "pj_turn_sock_alloc", status, "Error allocating TURN socket");
-        goto on_return;
-    }
+    // 4. TURN 서버 주소 설정
+    pj_str_t turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
+    pj_stun_auth_cred auth_cred;
+    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
+    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
+    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
 
-    // 5. TURN 소켓 시작
-    status = pj_turn_sock_start(turn_sock, 0, 0);
+    // 5. TURN 할당 요청 (Relay 주소 획득)
+    status = pj_turn_sock_alloc(turn_sock, &turn_server, TURN_SERVER_PORT, nullptr, &auth_cred, nullptr);
     if (status != PJ_SUCCESS) {
-        pj_perror(3, "pj_turn_sock_start", status, "Error starting TURN socket");
+        cerr << "pj_turn_sock_alloc error" << endl;
         goto on_return;
     }
 
     cout << "TURN ACK receiver started. Waiting for ACK messages..." << endl;
 
-    // 6. 무한 루프: TURN으로부터 데이터 수신
+    // 6. TURN 메시지 수신
     while (true) {
-        char ack_buffer[1024];
-        pj_turn_pkt pkt;
-        pj_bzero(&pkt, sizeof(pkt));
-        pkt.data = (pj_uint8_t*)ack_buffer;
-        pkt.data_len = sizeof(ack_buffer) - 1;
+        pj_uint8_t buffer[1024];
+        pj_size_t buffer_len = sizeof(buffer);
+        pj_sockaddr src_addr;
+        pj_size_t addr_len = sizeof(src_addr);
 
-        status = pj_turn_sock_recv(turn_sock, &pkt);
-        if (status == PJ_SUCCESS && pkt.data_len > 0) {
-            ack_buffer[pkt.data_len] = '\0';
-            cout << "Received ACK via TURN: " << ack_buffer << endl;
+        // 최신 PJNATH에서는 `pj_turn_sock_recv_msg()` 사용
+        status = pj_turn_sock_recv_msg(turn_sock, buffer, &buffer_len, &src_addr, &addr_len);
+        if (status == PJ_SUCCESS && buffer_len > 0) {
+            cout << "Received TURN ACK: " << string((char*)buffer, buffer_len) << endl;
         }
-        pj_thread_sleep(10); // 10ms 슬립 (과도한 CPU 사용 방지)
+        pj_thread_sleep(10);  // 10ms sleep to prevent high CPU usage
     }
 
 on_return:
-    // 종료 처리
-    if (pool) {
-        // turn_sock이 살아 있다면 안전하게 종료
-        if (turn_sock) {
-            pj_turn_sock_shutdown(turn_sock, PJ_TRUE);
-            pj_turn_sock_destroy(turn_sock);
-        }
-        pj_pool_release(pool);
+    if (turn_sock) {
+        pj_turn_sock_destroy(turn_sock);
     }
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
+
 
 // ----------------------------
 //    메인 스트리밍 로직 스레드
