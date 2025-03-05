@@ -432,7 +432,7 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    status = pj_turn_sock_set_perm(turn_sock, 0, &peer_addr, sizeof(peer_addr));
+    status = pj_turn_sock_set_perm(turn_sock, 1, &peer_addr, sizeof(peer_addr));
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
         goto on_return;
