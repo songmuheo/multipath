@@ -104,7 +104,7 @@ public:
         pkt.reset(av_packet_alloc());
         if (!pkt) throw runtime_error("Could not allocate AVPacket");
 
-        // 7) 소켓 생성 및 바인딩 (실제 인터페이스 사용: 프레임 송신)
+        // 7) 소켓 생성 및 바인딩
         sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
         sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
@@ -195,7 +195,7 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
-    // 인코딩 및 송신 (sendto() 사용 – 영상 프레임 전송)
+    // 인코딩 및 송신
     void encode_and_send_frame(uint64_t timestamp_frame) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending a frame for encoding" << endl;
@@ -291,6 +291,26 @@ private:
 };
 
 // ----------------------------
+// client_stream 함수 추가!!
+// ----------------------------
+void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running)
+{
+    while (running.load()) {
+        // RealSense에서 프레임 가져오기
+        rs2::frameset frames = pipe.wait_for_frames();
+        rs2::video_frame color_frame = frames.get_color_frame();
+        if (!color_frame) continue;
+
+        // 현재 시간(마이크로초) 기준 타임스탬프
+        uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
+
+        // VideoStreamer로 전달
+        streamer.stream(color_frame, timestamp_frame);
+    }
+}
+
+// ----------------------------
 //    TURN ACK 수신 스레드 함수
 // ----------------------------
 void turn_ack_receiver_thread()
@@ -338,30 +358,29 @@ void turn_ack_receiver_thread()
     status = pj_turn_sock_create(&stun_cfg,
                                  0,                // flag=0 (기본값)
                                  PJ_TURN_TP_UDP,   // 전송방식 (UDP)
-                                 nullptr,          // 콜백 (사용하지 않을 경우 nullptr)
+                                 nullptr,          // 콜백
                                  nullptr,          // 사용자 데이터
-                                 nullptr,          // 소켓 설정 (확장 파라미터 없으면 nullptr)
+                                 nullptr,          // 소켓 설정
                                  &turn_sock);
     if (status != PJ_SUCCESS) {
         cerr << "pj_turn_sock_create() error" << endl;
         goto on_return;
     }
 
-    // ------- [6] TURN 서버 주소 및 인증 정보 설정 ------
+    // ------- [6] TURN 서버 주소 & 인증 정보 ------
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-
     auth_cred.type                           = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username      = pj_str(const_cast<char*>(TURN_USERNAME));
     auth_cred.data.static_cred.data_type     = PJ_STUN_PASSWD_PLAIN;
     auth_cred.data.static_cred.data          = pj_str(const_cast<char*>(TURN_PASSWORD));
 
-    // ------- [7] TURN 할당 요청 (Relay 주소 획득) ------
+    // ------- [7] TURN 할당 요청 (Relay 주소)
     status = pj_turn_sock_alloc(turn_sock,
                                 &turn_server,
                                 TURN_SERVER_PORT,
-                                nullptr,       // DNS Resolver (필요 없으면 nullptr)
+                                nullptr,  // DNS Resolver
                                 &auth_cred,
-                                nullptr        // 추가 파라미터 (필요 없으면 nullptr)
+                                nullptr   // 추가 파라미터
                                 );
     if (status != PJ_SUCCESS) {
         cerr << "pj_turn_sock_alloc() error" << endl;
@@ -372,24 +391,22 @@ void turn_ack_receiver_thread()
 
     // ------- [8] 무한 루프 : TURN 데이터 수신 ------
     while (true) {
-        char        buffer[1024];
-        pj_size_t   buffer_len = sizeof(buffer);
-        pj_sockaddr src_addr;
-        pj_size_t   addr_len   = sizeof(src_addr);
+        char buffer[1024];
+        pj_turn_pkt pkt;
+        pj_bzero(&pkt, sizeof(pkt));
+        pkt.data     = (pj_uint8_t*)buffer;
+        pkt.data_len = (pj_uint16_t)(sizeof(buffer) - 1);
 
-        // pj_turn_sock_recvfrom() / pj_turn_sock_recv() / pj_turn_sock_recv_msg() 등
-        // 버전에 따라 존재하는 함수를 확인하여 사용.
-        // 여기서는 pj_turn_sock_recvfrom() 예시
-        status = pj_turn_sock_recvfrom(turn_sock, buffer, &buffer_len, 0, &src_addr, &addr_len);
-        if (status == PJ_SUCCESS && buffer_len > 0) {
-            cout << "[TURN] Received ACK: " << string(buffer, buffer_len) << endl;
+        status = pj_turn_sock_recv(turn_sock, &pkt);
+        if (status == PJ_SUCCESS && pkt.data_len > 0) {
+            buffer[pkt.data_len] = '\0'; // 문자열 마침
+            cout << "[TURN] Received ACK: " << buffer << endl;
         }
 
         pj_thread_sleep(10);  // 10ms sleep
     }
 
 on_return:
-    // ------- [9] 리소스 정리 ------
     if (turn_sock) {
         pj_turn_sock_destroy(turn_sock);
         turn_sock = nullptr;
@@ -397,6 +414,7 @@ on_return:
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
+
 // ----------------------------
 //              main()
 // ----------------------------
@@ -410,10 +428,11 @@ int main() {
 
         VideoStreamer streamer;
 
-        // TURN ACK 수신용 스레드 (ACK 수신은 별도 스레드로 동작)
+        // TURN ACK 수신용 스레드
         thread turn_thread(turn_ack_receiver_thread);
 
         atomic<bool> running(true);
+        // 여기서 client_stream() 함수를 실행
         thread client_thread(client_stream, ref(streamer), ref(pipe), ref(running));
 
         cout << "Press Enter to stop streaming..." << endl;
@@ -423,8 +442,7 @@ int main() {
         running.store(false);
         client_thread.join();
 
-        // TURN 스레드는 무한 루프이므로, 데모용으로 pthread_cancel() 사용
-        // 실제 제품 코드라면, 안전하게 종료할 수 있는 별도 신호/플래그로 제어하는 방식을 권장
+        // TURN 스레드 종료 (임시로 pthread_cancel 사용)
         pthread_cancel(turn_thread.native_handle());
         turn_thread.join();
     }
