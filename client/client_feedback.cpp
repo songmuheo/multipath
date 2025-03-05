@@ -1,0 +1,401 @@
+#include <iostream>
+#include <fstream>
+#include <atomic>
+#include <thread>
+#include <vector>
+#include <future>
+#include <chrono>
+#include <opencv2/opencv.hpp>
+#include <librealsense2/rs.hpp>
+#include <arpa/inet.h>
+#include <sys/types.h>
+#include <ifaddrs.h>
+#include <unistd.h>
+#include <filesystem>
+#include <cerrno>
+#include <cstring>
+#include "config.h"
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libavutil/opt.h>
+}
+
+// TURN 관련 헤더 (pjnath, pjlib)
+extern "C" {
+#include <pjlib.h>
+#include <pjlib-util.h>
+#include <pjnath.h>
+}
+
+using namespace std;
+namespace fs = std::filesystem;
+
+struct PacketHeader {
+    uint64_t timestamp_frame;
+    uint64_t timestamp_sending;
+    uint32_t sequence_number;
+};
+
+class VideoStreamer {
+public:
+    VideoStreamer() : frame_counter(0), sequence_number(0) {
+        // 출력 폴더 생성 및 로그 파일 오픈
+        create_and_set_output_folders();
+        open_log_file();
+
+        // 1) 코덱 찾기
+        codec = avcodec_find_encoder_by_name("libx264");
+        if (!codec) throw runtime_error("Codec not found");
+
+        // 2) 코덱 컨텍스트 할당
+        codec_ctx.reset(avcodec_alloc_context3(codec));
+        if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
+
+        // 3) 기본 설정
+        codec_ctx->width = WIDTH;
+        codec_ctx->height = HEIGHT;
+        codec_ctx->time_base = {1, FPS};
+        codec_ctx->framerate = {FPS, 1};
+        codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
+        codec_ctx->max_b_frames = 0;
+        codec_ctx->gop_size = 10;
+
+        // 4) libx264 옵션 설정
+        AVDictionary* opt = nullptr;
+        av_dict_set(&opt, "preset", "veryfast", 0);
+        av_dict_set(&opt, "tune", "zerolatency", 0);
+        av_dict_set(&opt, "crf", "26", 0);
+
+        string x264_params =
+            "keyint=10:"
+            "min-keyint=10:"
+            "scenecut=0:"
+            "bframes=0:"
+            "force-cfr=1:"
+            "rc-lookahead=0:"
+            "ref=1:"
+            "sliced-threads=0:"
+            "aq-mode=1:"
+            "trellis=0:"
+            "psy-rd=1.0:1.0";
+        av_dict_set(&opt, "x264-params", x264_params.c_str(), 0);
+
+        // 5) 코덱 오픈
+        if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
+            throw runtime_error("Could not open codec");
+        }
+        av_dict_free(&opt);
+
+        // 6) 프레임/패킷 구조체 할당
+        frame.reset(av_frame_alloc());
+        if (!frame) throw runtime_error("Could not allocate video frame");
+        frame->format = codec_ctx->pix_fmt;
+        frame->width  = codec_ctx->width;
+        frame->height = codec_ctx->height;
+        if (av_frame_get_buffer(frame.get(), 32) < 0)
+            throw runtime_error("Could not allocate the video frame data");
+
+        pkt.reset(av_packet_alloc());
+        if (!pkt) throw runtime_error("Could not allocate AVPacket");
+
+        // 7) 소켓 생성 및 바인딩 (실제 인터페이스 사용: 프레임 송신)
+        sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
+        sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
+
+        servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
+        servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
+
+        // 8) 색상 변환 컨텍스트 (YUYV422 → YUV420P)
+        sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422,
+                                 WIDTH, HEIGHT, AV_PIX_FMT_YUV420P,
+                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
+    }
+
+    ~VideoStreamer() {
+        close(sockfd1);
+        close(sockfd2);
+        sws_freeContext(sws_ctx);
+        log_file.close();
+    }
+
+    // 영상 스트리밍 함수
+    void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
+        frame->pts = frame_counter++;
+
+        uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
+        const uint8_t* src_slices[1] = { yuyv_data };
+        int src_stride[1] = { 2 * WIDTH };
+        sws_scale(sws_ctx, src_slices, src_stride, 0, HEIGHT,
+                  frame->data, frame->linesize);
+
+        save_frame(color_frame, timestamp_frame);
+        encode_and_send_frame(timestamp_frame);
+    }
+
+    atomic<int> sequence_number;
+
+private:
+    // 출력 폴더 생성
+    void create_and_set_output_folders() {
+        auto now = chrono::system_clock::now();
+        time_t time_now = chrono::system_clock::to_time_t(now);
+        tm local_time = *localtime(&time_now);
+
+        char folder_name[100];
+        strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
+
+        string base_folder = SAVE_FILEPATH + string(folder_name);
+        fs::create_directories(base_folder);
+        frames_folder = base_folder + "/frames";
+        logs_folder   = base_folder + "/logs";
+        fs::create_directories(frames_folder);
+        fs::create_directories(logs_folder);
+    }
+
+    // sockaddr_in 생성
+    struct sockaddr_in create_sockaddr(const char* ip, int port) {
+        struct sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = inet_addr(ip);
+        return addr;
+    }
+
+    // 소켓 생성 및 인터페이스 바인딩
+    int create_socket_and_bind(const char* interface_ip, const char* interface_name) {
+        int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sockfd < 0) throw runtime_error("Socket creation failed");
+
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
+            close(sockfd);
+            throw runtime_error("SO_BINDTODEVICE failed");
+        }
+
+        struct sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
+        if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
+            close(sockfd);
+            throw runtime_error("Bind failed");
+        }
+        return sockfd;
+    }
+
+    // PNG 파일로 프레임 저장
+    void save_frame(const rs2::video_frame& frame_data, uint64_t timestamp_frame) {
+        string filename = frames_folder + "/" + to_string(timestamp_frame) + ".png";
+        cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
+        cv::Mat bgr_image;
+        cv::cvtColor(yuyv_image, bgr_image, cv::COLOR_YUV2BGR_YUYV);
+        cv::imwrite(filename, bgr_image);
+    }
+
+    // 인코딩 및 송신 (sendto() 사용 – 영상 프레임 전송)
+    void encode_and_send_frame(uint64_t timestamp_frame) {
+        if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
+            cerr << "Error sending a frame for encoding" << endl;
+            return;
+        }
+
+        int ret;
+        while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
+            PacketHeader header;
+            header.timestamp_frame = timestamp_frame;
+            header.timestamp_sending =
+                chrono::duration_cast<chrono::microseconds>(
+                    chrono::system_clock::now().time_since_epoch()).count();
+            header.sequence_number = sequence_number++;
+
+            double encoding_latency =
+                (header.timestamp_sending - header.timestamp_frame) / 1000.0;
+
+            string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
+
+            vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
+            memcpy(packet_data.data(), &header, sizeof(PacketHeader));
+            memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
+
+            log_packet_to_csv(sequence_number - 1, pkt->size,
+                              header.timestamp_frame,
+                              header.timestamp_sending,
+                              frame->pts,
+                              encoding_latency,
+                              frame_type);
+
+            // 두 인터페이스로 전송
+            auto send_task1 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0,
+                           (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
+                    cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
+            });
+            auto send_task2 = async(launch::async, [this, &packet_data] {
+                if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0,
+                           (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0)
+                    cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
+            });
+
+            send_task1.get();
+            send_task2.get();
+
+            av_packet_unref(pkt.get());
+        }
+        if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+            cerr << "Error receiving encoded packet" << endl;
+        }
+    }
+
+    void open_log_file() {
+        log_file.open(logs_folder + "/packet_log.csv");
+        if (!log_file.is_open())
+            throw runtime_error("Failed to open CSV log file");
+        log_file << "sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type\n";
+    }
+
+    void log_packet_to_csv(int sequence_number, int size,
+                           uint64_t timestamp, uint64_t sendtime,
+                           int64_t pts, double encoding_latency,
+                           const string& frame_type) {
+        log_file << sequence_number << ","
+                 << pts << ","
+                 << size << ","
+                 << timestamp << ","
+                 << sendtime << ","
+                 << encoding_latency << ","
+                 << frame_type << "\n";
+    }
+
+    // 멤버 변수들
+    const AVCodec* codec;
+    unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{
+        nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }
+    };
+    unique_ptr<AVFrame, void(*)(AVFrame*)> frame{
+        nullptr, [](AVFrame* p) { av_frame_free(&p); }
+    };
+    unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{
+        nullptr, [](AVPacket* p) { av_packet_free(&p); }
+    };
+
+    SwsContext* sws_ctx = nullptr;
+    ofstream log_file;
+    int sockfd1, sockfd2;
+    struct sockaddr_in servaddr1, servaddr2;
+    atomic<int> frame_counter;
+    string frames_folder;
+    string logs_folder;
+};
+
+// TURN ACK 수신을 위한 스레드 함수 (pjnath/pjlib 사용)
+void turn_ack_receiver_thread() {
+    pj_status_t status;
+    pj_caching_pool cp;
+    pj_pool_t *pool;
+    pj_turn_sock *turn_sock = nullptr;
+    pj_turn_srv turn_srv;
+    pj_sockaddr turn_srv_addr;
+
+    // pjlib 초기화
+    status = pj_init();
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_init error" << endl;
+        return;
+    }
+    pj_caching_pool_init(&cp, NULL, 0);
+    pool = pj_pool_create(&cp.factory, "turn_ack", 512, 512, NULL);
+
+    // TURN 서버 주소 설정
+    pj_sockaddr_init(&turn_srv_addr, PJ_AF_INET, TURN_SERVER_IP, TURN_SERVER_PORT);
+    pj_bzero(&turn_srv, sizeof(turn_srv));
+    turn_srv.transport = PJ_TURN_TP_UDP;
+    turn_srv.addr = turn_srv_addr;
+    // 사용자 인증 정보 (실제 환경에서는 lt-cred-mech 사용)
+    pj_str_t username = pj_str(const_cast<char*>(TURN_USERNAME));
+    pj_str_t password = pj_str(const_cast<char*>(TURN_PASSWORD));
+    turn_srv.username = username;
+    turn_srv.password = password;
+    // realm 등 필요한 추가 필드도 설정할 수 있음
+
+    // TURN 소켓 생성
+    status = pj_turn_sock_create(pool, &turn_srv, PJ_TURN_TP_UDP, 0, &turn_sock);
+    if (status != PJ_SUCCESS) {
+        pj_perror(3, "pj_turn_sock_create", status, "Error creating TURN socket");
+        goto on_return;
+    }
+
+    // TURN 할당 시작 (릴레이 주소 할당)
+    status = pj_turn_sock_start(turn_sock, pool, NULL, NULL, NULL);
+    if (status != PJ_SUCCESS) {
+        pj_perror(3, "pj_turn_sock_start", status, "Error starting TURN socket");
+        goto on_return;
+    }
+
+    cout << "TURN ACK receiver started. Waiting for ACK messages..." << endl;
+    while (true) {
+        char ack_buffer[1024];
+        pj_turn_pkt pkt;
+        pj_bzero(&pkt, sizeof(pkt));
+        pkt.data = (pj_uint8_t*)ack_buffer;
+        pkt.data_len = sizeof(ack_buffer) - 1;
+
+        status = pj_turn_sock_recv(turn_sock, &pkt);
+        if (status == PJ_SUCCESS && pkt.data_len > 0) {
+            ack_buffer[pkt.data_len] = '\0';
+            cout << "Received ACK via TURN: " << ack_buffer << endl;
+        }
+        pj_thread_sleep(10);
+    }
+
+on_return:
+    if (turn_sock)
+        pj_turn_sock_close(turn_sock);
+    pj_pool_release(pool);
+    pj_caching_pool_destroy(&cp);
+    pj_shutdown();
+}
+
+void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
+    while (running.load()) {
+        rs2::frameset frames = pipe.wait_for_frames();
+        rs2::video_frame color_frame = frames.get_color_frame();
+        if (!color_frame) continue;
+
+        uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
+        streamer.stream(color_frame, timestamp_frame);
+    }
+}
+
+int main() {
+    try {
+        // RealSense 파이프라인 설정
+        rs2::pipeline pipe;
+        rs2::config cfg;
+        cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
+        pipe.start(cfg);
+
+        VideoStreamer streamer;
+
+        // TURN ACK 수신용 스레드 (ACK 수신은 별도 스레드로 동작)
+        thread turn_thread(turn_ack_receiver_thread);
+
+        atomic<bool> running(true);
+        thread client_thread(client_stream, ref(streamer), ref(pipe), ref(running));
+
+        cout << "Press Enter to stop streaming..." << endl;
+        cin.get();
+
+        running.store(false);
+        client_thread.join();
+
+        // TURN 스레드는 무한 루프이므로 프로그램 종료 시 강제 종료 필요 (실제 구현에서는 종료 플래그 사용)
+        pthread_cancel(turn_thread.native_handle());
+        turn_thread.join();
+    }
+    catch (const exception& e) {
+        cerr << "Error: " << e.what() << endl;
+        return EXIT_FAILURE;
+    }
+    return EXIT_SUCCESS;
+}
