@@ -33,10 +33,13 @@ const char* INTERFACE2_IP = "192.168.1.16";
 const char* INTERFACE2_NAME = "enx588694f64878";
 
 // TURN 서버 설정
-#define TURN_SERVER_IP "121.128.220.205"    // coturn 서버 IP (환경에 맞게 수정)
-#define TURN_SERVER_PORT 3478                     // coturn 기본 포트
-#define TURN_USERNAME "user"                  // coturn 사용자 이름
-#define TURN_PASSWORD "v2n2v123"                  // coturn 비밀번호
+// config.h (일부)
+#define TURN_SERVER_IP      "121.128.220.205"
+#define TURN_SERVER_PORT    3478
+#define TURN_SECRET         "v2n2v123"   // static-auth-secret
+#define TURN_REALM          "v2n2v"
+#define TURN_IDENTIFIER     "client"     // 클라이언트 식별자 (원하는 값)
+#define TURN_VALID_SECONDS  3600         // 유효기간 (초)
 
 
 // 클라이언트 TURN 릴레이 주소 (TURN 할당 후 클라이언트가 ACK 수신용으로 사용할 주소)

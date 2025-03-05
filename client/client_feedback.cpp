@@ -5,6 +5,8 @@
 #include <vector>
 #include <future>
 #include <chrono>
+#include <sstream>
+#include <iomanip>
 #include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
 #include <arpa/inet.h>
@@ -15,6 +17,10 @@
 #include <cerrno>
 #include <cstring>
 #include "config.h"
+
+// OpenSSL 헤더 추가 (HMAC 계산용)
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -41,6 +47,29 @@ struct PacketHeader {
     uint64_t timestamp_sending;
     uint32_t sequence_number;
 };
+
+// ----- TURN Credential Helper Functions ----- //
+std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
+    // 현재 시간을 초 단위로 얻은 후 유효시간을 더함
+    uint64_t expiration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
+    return std::to_string(expiration) + ":" + identifier;
+}
+
+std::string compute_turn_password(const std::string& username, const std::string& secret) {
+    unsigned char hmac_result[EVP_MAX_MD_SIZE] = {0};
+    unsigned int hmac_length = 0;
+    HMAC(EVP_sha1(),
+         secret.c_str(), secret.size(),
+         reinterpret_cast<const unsigned char*>(username.c_str()), username.size(),
+         hmac_result, &hmac_length);
+    std::ostringstream oss;
+    for (unsigned int i = 0; i < hmac_length; i++) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << (int)hmac_result[i];
+    }
+    return oss.str();
+}
+// ---------------------------------------------- //
 
 class VideoStreamer {
 public:
@@ -229,7 +258,7 @@ private:
                               encoding_latency,
                               frame_type);
 
-            // 두 인터페이스로 전송 (필요에 따라 async 대신 순차 전송도 고려)
+            // 두 인터페이스로 전송 (비동기 전송)
             auto send_task1 = async(launch::async, [this, &packet_data] {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0,
                            (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
@@ -334,7 +363,7 @@ void turn_ack_receiver_thread()
     pj_pool_t *pool = nullptr;
     pj_ioqueue_t *ioqueue = nullptr;
     pj_stun_config stun_cfg;
-    pj_timer_heap_t *timer_heap = nullptr;  // 타이머 힙 변수 추가
+    pj_timer_heap_t *timer_heap = nullptr;  // 타이머 힙 변수
 
     pj_turn_sock *turn_sock = nullptr;
     pj_str_t turn_server;
@@ -347,7 +376,6 @@ void turn_ack_receiver_thread()
         return;
     }
     
-    // **pjlib_util_init() 호출 추가**
     status = pjlib_util_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pjlib_util_init() error" << std::endl;
@@ -355,7 +383,6 @@ void turn_ack_receiver_thread()
     }
 
     pj_caching_pool_init(&cp, nullptr, 0);
-
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
     if (!pool) {
         std::cerr << "Failed to create pool" << std::endl;
@@ -368,27 +395,24 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 타이머 힙 생성 (예: 최대 128개의 타이머)
     status = pj_timer_heap_create(pool, 128, &timer_heap);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_timer_heap_create() error" << std::endl;
         goto on_return;
     }
 
-    // stun_cfg 구조체를 0으로 초기화 (매우 중요!)
     pj_bzero(&stun_cfg, sizeof(stun_cfg));
-    // 타이머 힙을 이용하여 STUN/TURN 설정 초기화
     pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
 
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
     g_turn_callbacks.on_rx_data = &on_rx_data;
 
     status = pj_turn_sock_create(&stun_cfg,
-                                 PJ_AF_INET,                 // flags
-                                 PJ_TURN_TP_UDP,    // UDP
-                                 &g_turn_callbacks, // 콜백 구조체
-                                 nullptr,           // user_data
-                                 nullptr,           // 소켓 설정
+                                 PJ_AF_INET,
+                                 PJ_TURN_TP_UDP,
+                                 &g_turn_callbacks,
+                                 nullptr,
+                                 nullptr,
                                  &turn_sock);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_create() error" << std::endl;
@@ -396,26 +420,38 @@ void turn_ack_receiver_thread()
     }
 
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
+
+    // ---- 동적 자격증명 생성 (ephemeral credentials) ---- //
+    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    std::string ephemeral_password = compute_turn_password(ephemeral_username, TURN_SECRET);
+
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
+    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    // ------------------------------------------------------- //
 
     status = pj_turn_sock_alloc(
         turn_sock,
         &turn_server,
         TURN_SERVER_PORT,
-        nullptr,     // DNS Resolver
+        nullptr,
         &auth_cred,
-        nullptr      // 추가 파라미터
+        nullptr
     );
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_alloc() error" << std::endl;
         goto on_return;
     }
 
-    std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
+    pj_str_t server_ip_str = pj_str(const_cast<char*>(SERVER_IP));
+    status = pj_turn_sock_add_perm(turn_sock, &server_ip_str);
+    if (status != PJ_SUCCESS) {
+        std::cerr << "pj_turn_sock_add_perm() error" << std::endl;
+        goto on_return;
+    }
 
+    std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
     while (turn_running.load()) {
         pj_thread_sleep(10);  // 10ms
     }
@@ -433,13 +469,11 @@ on_return:
     pj_shutdown();
 }
 
-
 // ----------------------------
 // main()
 // ----------------------------
 int main() {
     try {
-        // RealSense 파이프라인 설정
         rs2::pipeline pipe;
         rs2::config cfg;
         cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
@@ -456,11 +490,9 @@ int main() {
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
-        // 스트리밍 종료
         running.store(false);
         client_thread.join();
 
-        // TURN 스레드 종료 요청 후 join
         turn_running.store(false);
         turn_thread.join();
     }

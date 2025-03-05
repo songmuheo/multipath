@@ -42,7 +42,7 @@ string get_h264_frame_type(const uint8_t* data, size_t size) {
     if (size < 5)
         return "UNKNOWN";
     for (size_t i = 0; i < size - 3; i++) {
-        if (i < size - 3 && data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01) {
+        if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01) {
             if ((data[i+3] & 0x1F) == 5) return "I";
         }
         if (i < size - 4 && data[i] == 0x00 && data[i+1] == 0x00 &&
@@ -75,13 +75,12 @@ void log_packet_info(const char* logpath,
     logfile.close();
 }
 
-// ACK 송신 함수: 서버가 수신한 패킷에 대해 ACK 메시지를 클라이언트 TURN 릴레이 주소로 전송
-void send_ack(int sockfd, const sockaddr_in &client_turn_addr,
+void send_ack(int sockfd, const sockaddr_in &client_addr,
               uint32_t sequence_number, uint64_t latency_us)
 {
     string ack_msg = "ACK:" + to_string(sequence_number) + "," + to_string(latency_us / 1000.0);
     if (sendto(sockfd, ack_msg.c_str(), ack_msg.size(), 0,
-               (const struct sockaddr*)&client_turn_addr, sizeof(client_turn_addr)) < 0)
+               (const struct sockaddr*)&client_addr, sizeof(client_addr)) < 0)
     {
         cerr << "ACK 송신 실패: " << strerror(errno) << endl;
     }
@@ -112,12 +111,6 @@ void receive_packets(int port, const char* log_filepath) {
 
     cout << "Listening on port " << port << endl;
     create_log_file(log_filepath);
-
-    // 클라이언트 TURN 릴레이 주소 (config.h에 정의된 값)
-    sockaddr_in client_turn_addr = {};
-    client_turn_addr.sin_family = AF_INET;
-    client_turn_addr.sin_port = htons(CLIENT_TURN_PORT);
-    client_turn_addr.sin_addr.s_addr = inet_addr(CLIENT_TURN_IP);
 
     while (true) {
         ssize_t len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
@@ -151,8 +144,8 @@ void receive_packets(int port, const char* log_filepath) {
                             len,
                             frame_type);
 
-            // ACK 송신: TURN 릴레이 주소로 전송
-            send_ack(sockfd, client_turn_addr, header->sequence_number, network_latency_us);
+            // 실제 패킷 송신자 주소(client_addr)로 ACK 전송
+            send_ack(sockfd, client_addr, header->sequence_number, network_latency_us);
         }
         else {
             cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
@@ -167,7 +160,6 @@ int main() {
     string port1_log = folder_path + "/lg_log.csv";
     string port2_log = folder_path + "/kt_log.csv";
 
-    // 포트 1과 포트 2에서 패킷 수신을 별도 스레드로 처리
     thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str());
     thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str());
 

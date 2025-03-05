@@ -1,34 +1,170 @@
-// server/config.h
+#include <iostream>
+#include <fstream>
+#include <cstring>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <chrono>
+#include <atomic>
+#include <iomanip>
+#include <ctime>
+#include <thread>
+#include <filesystem>
+#include "config.h"
 
-#ifndef CONFIG_H
-#define CONFIG_H
+using namespace std;
+namespace fs = std::filesystem;
 
-#include <string>
+struct PacketHeader {
+    uint64_t timestamp_frame;
+    uint64_t timestamp_sending;
+    uint32_t sequence_number;
+};
 
-const char* SERVER_IP = "121.128.220.205";
+string create_timestamped_directory(const string& base_dir) {
+    auto now = chrono::system_clock::now();
+    time_t now_time = chrono::system_clock::to_time_t(now);
+    tm* local_time = localtime(&now_time);
+    char folder_name[100];
+    strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", local_time);
+    string full_path = base_dir + "/" + folder_name;
+    fs::create_directories(full_path);
+    return full_path;
+}
 
-const int SERVER_PORT1 = 12345; //lg
-const int SERVER_PORT2 = 12346; //kt
+void create_log_file(const char* logpath) {
+    ofstream logfile(logpath, ios::app);
+    logfile << "source_ip,sequence_number,timestamp_frame,timestamp_sending,received_time,network_latency_ms,message_size,frame_type\n";
+    logfile.close();
+}
 
-const int BUFFER_SIZE = 65536;
+string get_h264_frame_type(const uint8_t* data, size_t size) {
+    if (size < 5)
+        return "UNKNOWN";
+    for (size_t i = 0; i < size - 3; i++) {
+        if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01) {
+            if ((data[i+3] & 0x1F) == 5) return "I";
+        }
+        if (i < size - 4 && data[i] == 0x00 && data[i+1] == 0x00 &&
+            data[i+2] == 0x00 && data[i+3] == 0x01) {
+            if ((data[i+4] & 0x1F) == 1) return "P";
+        }
+    }
+    return "OTHER";
+}
 
-const std::string BASE_FILEPATH = "/home/songmu/";
+void log_packet_info(const char* logpath,
+                     const string& source_ip,
+                     uint32_t sequence_number,
+                     uint64_t timestamp_frame,
+                     uint64_t timestamp_sending,
+                     uint64_t received_time_us,
+                     uint64_t network_latency_us,
+                     size_t message_size,
+                     const string& frame_type)
+{
+    ofstream logfile(logpath, ios::app);
+    logfile << source_ip << ","
+            << sequence_number << ","
+            << timestamp_frame << ","
+            << timestamp_sending << ","
+            << received_time_us << ","
+            << (network_latency_us / 1000.0) << ","
+            << message_size << ","
+            << frame_type << "\n";
+    logfile.close();
+}
 
-// Path to save bin files(received packet)
-const std::string FILEPATH_LOG = BASE_FILEPATH + "multipath/server/logs/";
+void send_ack(int sockfd, const sockaddr_in &client_addr,
+              uint32_t sequence_number, uint64_t latency_us)
+{
+    string ack_msg = "ACK:" + to_string(sequence_number) + "," + to_string(latency_us / 1000.0);
+    if (sendto(sockfd, ack_msg.c_str(), ack_msg.size(), 0,
+               (const struct sockaddr*)&client_addr, sizeof(client_addr)) < 0)
+    {
+        cerr << "ACK 송신 실패: " << strerror(errno) << endl;
+    }
+}
 
-const uint64_t PLAY_DELAY_MS = 50;
+void receive_packets(int port, const char* log_filepath) {
+    int sockfd;
+    char buffer[BUFFER_SIZE];
+    sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
 
-// TURN 서버 설정
-#define TURN_SERVER_IP "121.128.220.205"    // coturn 서버 IP (환경에 맞게 수정)
-#define TURN_SERVER_PORT 3478                     // coturn 기본 포트
-#define TURN_USERNAME "user"                  // coturn 사용자 이름
-#define TURN_PASSWORD "v2n2v123"                  // coturn 비밀번호
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+    memset(&server_addr, 0, sizeof(server_addr));
+    memset(&client_addr, 0, sizeof(client_addr));
 
-// 클라이언트 TURN 릴레이 주소 (TURN 할당 후 클라이언트가 ACK 수신용으로 사용할 주소)
-// 실제 운영에서는 TURN 할당 시 동적으로 얻어야 함
-#define CLIENT_TURN_IP "121.128.220.205"  // 예시 값, TURN 할당 시 결정됨
-#define CLIENT_TURN_PORT 6000                     //
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(port);
 
+    if (bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
 
-#endif // CONFIG_H
+    cout << "Listening on port " << port << endl;
+    create_log_file(log_filepath);
+
+    while (true) {
+        ssize_t len = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr *)&client_addr, &addr_len);
+        if (len < 0) {
+            perror("recvfrom failed");
+            continue;
+        }
+
+        uint64_t received_time_us = chrono::duration_cast<chrono::microseconds>(
+                                        chrono::system_clock::now().time_since_epoch()).count();
+
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+
+        PacketHeader* header = reinterpret_cast<PacketHeader*>(buffer);
+        uint64_t network_latency_us = received_time_us - header->timestamp_sending;
+
+        size_t header_size = sizeof(PacketHeader);
+        if (len > header_size) {
+            const uint8_t* h264_data = reinterpret_cast<const uint8_t*>(buffer + header_size);
+            size_t h264_size = len - header_size;
+            string frame_type = get_h264_frame_type(h264_data, h264_size);
+
+            log_packet_info(log_filepath,
+                            client_ip,
+                            header->sequence_number,
+                            header->timestamp_frame,
+                            header->timestamp_sending,
+                            received_time_us,
+                            network_latency_us,
+                            len,
+                            frame_type);
+
+            // 실제 패킷 송신자 주소(client_addr)로 ACK 전송
+            send_ack(sockfd, client_addr, header->sequence_number, network_latency_us);
+        }
+        else {
+            cerr << "Error: Packet size (" << len << ") < Header size (" << header_size << ")\n";
+        }
+    }
+    close(sockfd);
+}
+
+int main() {
+    string base_dir = FILEPATH_LOG;
+    string folder_path = create_timestamped_directory(base_dir);
+    string port1_log = folder_path + "/lg_log.csv";
+    string port2_log = folder_path + "/kt_log.csv";
+
+    thread port1_thread(receive_packets, SERVER_PORT1, port1_log.c_str());
+    thread port2_thread(receive_packets, SERVER_PORT2, port2_log.c_str());
+
+    port1_thread.join();
+    port2_thread.join();
+
+    return 0;
+}
