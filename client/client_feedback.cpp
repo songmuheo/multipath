@@ -350,6 +350,7 @@ void turn_ack_receiver_thread()
     // 변수들을 최상단에 선언하여 goto 문제 해결
     std::string ephemeral_username;
     std::string ephemeral_password;
+    pj_sockaddr peer_addr;
 
     status = pj_init();
     if (status != PJ_SUCCESS) {
@@ -423,14 +424,14 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
-    // 서버 IP를 pj_sockaddr로 파싱하여 권한 설정에 사용
-    pj_sockaddr peer_addr;
-    status = pj_sockaddr_parse(PJ_AF_INET, SERVER_IP, &peer_addr);
+    // SERVER_IP를 pj_str_t로 변환하여 pj_sockaddr_parse에 전달 (포트 0 사용)
+    pj_str_t ip_str = pj_str(const_cast<char*>(SERVER_IP));
+    status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_sockaddr_parse() error" << std::endl;
         goto on_return;
     }
-    // index를 0, peer_addr와 그 크기를 함께 전달
+    // index 0과 함께 peer_addr, 크기를 전달
     status = pj_turn_sock_set_perm(turn_sock, 0, &peer_addr, sizeof(peer_addr));
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
@@ -454,6 +455,7 @@ on_return:
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
+
 
 
 // ----------------------------
