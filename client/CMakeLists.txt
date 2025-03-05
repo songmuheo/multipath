@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 # realsense2 및 OpenCV 라이브러리 설정
 find_package(realsense2 REQUIRED)
 find_package(OpenCV REQUIRED)
+
+# OpenSSL 라이브러리 추가
 find_package(OpenSSL REQUIRED)
 
 # FFmpeg 라이브러리 설정 (직접 경로로 설정)
@@ -47,6 +49,6 @@ target_link_libraries(client_feedback
     ${OpenCV_LIBS}
     ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE}
     ${PJSIP_LIBS}
-    OpenSSL::SSL OPenSSL::Crypto
+    OpenSSL::SSL OpenSSL::Crypto
     pthread
 )
