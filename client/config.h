@@ -45,16 +45,13 @@ const char* INTERFACE2_NAME = "enx588694f64878";
 
 // TURN 서버 정보
 // (실환경에 맞게 수정: TURN_SERVER_IP, TURN_SERVER_PORT, TURN_REALM, TURN_SECRET 등)
-static const char* TURN_SERVER_IP   = "121.128.220.205"; // coturn IP
-static const int   TURN_SERVER_PORT = 3478;
-static const char* TURN_REALM       = "v2n2v";     // turnserver.conf의 realm
-static const char* TURN_SECRET      = "v2n2v123";  // turnserver.conf의 static-auth-secret
-
-
-// 클라이언트 TURN 릴레이 주소 (TURN 할당 후 클라이언트가 ACK 수신용으로 사용할 주소)
-// 실제 운영에서는 TURN 할당 시 동적으로 얻어야 함
-#define CLIENT_TURN_IP "121.128.220.205"  // 예시 값, TURN 할당 시 결정됨
-#define CLIENT_TURN_PORT 6000                     //
+// TURN 관련 설정 (coturn 서버와 일치시켜야 함)
+#define TURN_SERVER_IP "121.128.220.205"
+#define TURN_SERVER_PORT 3478
+#define TURN_IDENTIFIER "client_id"          // 클라이언트를 식별할 문자열
+#define TURN_VALID_SECONDS 600                 // 유효 시간 (초)
+#define TURN_REALM "v2n2v"
+#define TURN_SECRET "v2n2v123"
 
 const int HEIGHT = 480;
 const int WIDTH = 640;

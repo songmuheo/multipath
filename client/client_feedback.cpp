@@ -189,7 +189,7 @@ private:
         tm local_time = *localtime(&time_now);
         char folder_name[100];
         strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
-        string base_folder = SAVE_FILEPATH + string(folder_name);
+        string base_folder = FILEPATH_LOG + string(folder_name);
         fs::create_directories(base_folder);
         frames_folder = base_folder + "/frames";
         logs_folder   = base_folder + "/logs";
@@ -327,7 +327,7 @@ private:
 static void on_rx_data(pj_turn_sock *sock,
                        void *user_data,
                        unsigned int size,
-                       const pj_sockaddr_t *src_addr,
+                       const pj_sockaddr *src_addr,
                        unsigned int addr_len)
 {
     if (size > 0) {
@@ -341,7 +341,9 @@ static pj_turn_sock_cb g_turn_callbacks;
 // 전역 종료 플래그 (TURN 스레드용)
 atomic<bool> turn_running{true};
 
+// ----------------------------
 // TURN ACK 수신 스레드 (할당 및 수신)
+// ----------------------------
 void turn_ack_receiver_thread()
 {
     pj_status_t status;
@@ -350,49 +352,46 @@ void turn_ack_receiver_thread()
     pj_ioqueue_t *ioqueue = nullptr;
     pj_stun_config stun_cfg;
     pj_timer_heap_t *timer_heap = nullptr;
-
     pj_turn_sock *turn_sock = nullptr;
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
-    pj_sockaddr_t peer_addr;
+    pj_sockaddr peer_addr;
+    pj_sockaddr relay_addr;
+    pj_str_t ip_str;
+    std::string ephemeral_username;
+    std::string ephemeral_password;
 
     status = pj_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_init() error" << std::endl;
-        return;
+        goto on_return;
     }
-    
     status = pjlib_util_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pjlib_util_init() error" << std::endl;
-        return;
+        goto on_return;
     }
-
+    
     pj_caching_pool_init(&cp, nullptr, 0);
     pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
     if (!pool) {
         std::cerr << "Failed to create pool" << std::endl;
         goto on_return;
     }
-
     status = pj_ioqueue_create(pool, 64, &ioqueue);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_ioqueue_create() error" << std::endl;
         goto on_return;
     }
-
     status = pj_timer_heap_create(pool, 128, &timer_heap);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_timer_heap_create() error" << std::endl;
         goto on_return;
     }
-
     pj_bzero(&stun_cfg, sizeof(stun_cfg));
     pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
-
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
     g_turn_callbacks.on_rx_data = &on_rx_data;
-
     status = pj_turn_sock_create(&stun_cfg,
                                  PJ_AF_INET,
                                  PJ_TURN_TP_UDP,
@@ -404,17 +403,13 @@ void turn_ack_receiver_thread()
         std::cerr << "pj_turn_sock_create() error" << std::endl;
         goto on_return;
     }
-
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-
-    // 동적 자격증명 생성
-    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    std::string ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
+    ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-
     status = pj_turn_sock_alloc(
         turn_sock,
         &turn_server,
@@ -427,9 +422,7 @@ void turn_ack_receiver_thread()
         std::cerr << "pj_turn_sock_alloc() error" << std::endl;
         goto on_return;
     }
-
-    // 서버 주소에 대한 permission 설정 (TURN 릴레이 사용)
-    pj_str_t ip_str = pj_str(const_cast<char*>(SERVER_IP));
+    ip_str = pj_str(const_cast<char*>(SERVER_IP));
     status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_sockaddr_parse() error" << std::endl;
@@ -440,9 +433,6 @@ void turn_ack_receiver_thread()
         std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
         goto on_return;
     }
-
-    // 할당받은 TURN 릴레이 주소 얻기 (실제 API는 다를 수 있음)
-    pj_sockaddr_t relay_addr;
     status = pj_turn_sock_get_info(turn_sock, &relay_addr);
     if (status == PJ_SUCCESS) {
         memcpy(&turn_relay_addr, &relay_addr, sizeof(sockaddr_in));
@@ -457,12 +447,10 @@ void turn_ack_receiver_thread()
     } else {
         std::cerr << "Failed to get TURN relay address" << std::endl;
     }
-
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
     while (turn_running.load()) {
-        pj_thread_sleep(10);  // 10ms 대기
+        pj_thread_sleep(10);
     }
-
 on_return:
     if (turn_sock) {
         pj_turn_sock_destroy(turn_sock);
@@ -476,9 +464,6 @@ on_return:
     pj_shutdown();
 }
 
-// ----------------------------
-// 영상 스트리밍 함수
-// ----------------------------
 void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running)
 {
     while (running.load()) {
@@ -491,9 +476,6 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
-// ----------------------------
-// main()
-// ----------------------------
 int main() {
     try {
         rs2::pipeline pipe;
