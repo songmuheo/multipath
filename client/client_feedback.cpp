@@ -407,12 +407,11 @@ void turn_ack_receiver_thread()
     ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     // password는 "ephemeral_username:TURN_REALM"을 기반으로 HMAC 계산
     ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
-    // long-term 인증 방식 사용 (구조체 멤버는 data.lt)
-    auth_cred.type = PJ_STUN_AUTH_LONG_TERM;
-    auth_cred.data.lt.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
-    auth_cred.data.lt.realm = pj_str(const_cast<char*>(TURN_REALM));
-    auth_cred.data.lt.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
-    auth_cred.data.lt.data_type = PJ_STUN_PASSWD_PLAIN;
+    // static 방식으로 인증 정보 전달
+    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
+    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
 
     status = pj_turn_sock_alloc(
         turn_sock,
