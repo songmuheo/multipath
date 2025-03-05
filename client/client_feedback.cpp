@@ -55,12 +55,12 @@ std::string generate_turn_username(const std::string& identifier, uint32_t valid
     return std::to_string(expiration) + ":" + identifier;
 }
 
-std::string compute_turn_password(const std::string& username, const std::string& secret) {
+std::string compute_turn_password(const std::string& data, const std::string& secret) {
     unsigned char hmac_result[EVP_MAX_MD_SIZE] = {0};
     unsigned int hmac_length = 0;
     HMAC(EVP_sha1(),
          secret.c_str(), secret.size(),
-         reinterpret_cast<const unsigned char*>(username.c_str()), username.size(),
+         reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
          hmac_result, &hmac_length);
     std::ostringstream oss;
     for (unsigned int i = 0; i < hmac_length; i++) {
@@ -406,7 +406,8 @@ void turn_ack_receiver_thread()
 
     // 동적 자격증명 생성
     ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    ephemeral_password = compute_turn_password(ephemeral_username, TURN_SECRET);
+    // **realm 포함하여 HMAC 계산**
+    ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
