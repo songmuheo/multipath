@@ -392,18 +392,29 @@ void turn_ack_receiver_thread()
     // ------- [8] 무한 루프 : TURN 데이터 수신 ------
     while (true) {
         char buffer[1024];
-        pj_turn_pkt pkt;
-        pj_bzero(&pkt, sizeof(pkt));
-        pkt.data     = (pj_uint8_t*)buffer;
-        pkt.data_len = (pj_uint16_t)(sizeof(buffer) - 1);
+        pj_size_t buffer_len = sizeof(buffer);
+        pj_sockaddr src_addr;
+        pj_size_t src_addr_len = sizeof(src_addr);
 
-        status = pj_turn_sock_recv(turn_sock, &pkt);
-        if (status == PJ_SUCCESS && pkt.data_len > 0) {
-            buffer[pkt.data_len] = '\0'; // 문자열 마침
-            cout << "[TURN] Received ACK: " << buffer << endl;
+        // 버전에 따라 존재하는 수신 함수 확인 (아래 예: pj_turn_sock_recv_msg)
+        status = pj_turn_sock_recv_msg(turn_sock,
+                                    buffer,
+                                    &buffer_len,
+                                    &src_addr,
+                                    &src_addr_len);
+        if (status == PJ_SUCCESS && buffer_len > 0) {
+            // 수신된 실제 데이터 길이는 buffer_len
+            // 문자열이라면 '\0' 처리
+            if (buffer_len < sizeof(buffer)) {
+                buffer[buffer_len] = '\0';
+                cout << "[TURN] Received: " << buffer << endl;
+            } else {
+                // 받은 데이터가 꽉 찬 경우 (널문자 없이)
+                cout << "[TURN] Received (size=" << buffer_len << ")" << endl;
+            }
         }
 
-        pj_thread_sleep(10);  // 10ms sleep
+        pj_thread_sleep(10);
     }
 
 on_return:
