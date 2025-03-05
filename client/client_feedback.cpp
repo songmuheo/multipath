@@ -34,27 +34,6 @@ using namespace std;
 namespace fs = std::filesystem;
 
 // ----------------------------
-//     헬퍼 함수: pj_sockaddr_t를 문자열로 변환
-// ----------------------------
-string sockaddr_to_string(const pj_sockaddr_t* addr, unsigned int addr_len) {
-    char ip[INET6_ADDRSTRLEN];
-    int port = 0;
-    if (addr->addr.sa_family == AF_INET) {
-        struct sockaddr_in* addr_in = (struct sockaddr_in*)addr;
-        inet_ntop(AF_INET, &(addr_in->sin_addr), ip, sizeof(ip));
-        port = ntohs(addr_in->sin_port);
-    } else if (addr->addr.sa_family == AF_INET6) {
-        struct sockaddr_in6* addr_in6 = (struct sockaddr_in6*)addr;
-        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), ip, sizeof(ip));
-        port = ntohs(addr_in6->sin6_port);
-    } else {
-        strcpy(ip, "Unknown");
-    }
-    return string(ip) + ":" + to_string(port);
-}
-
-
-// ----------------------------
 //     영상 관련 구조체/클래스
 // ----------------------------
 struct PacketHeader {
