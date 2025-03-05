@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <cerrno>
 #include <cstring>
+#include <mutex>       // 추가: 멀티스레드 안전한 로그를 위한 mutex
 #include "config.h"
 
 extern "C" {
@@ -32,6 +33,32 @@ extern "C" {
 
 using namespace std;
 namespace fs = std::filesystem;
+
+// ----------------------------
+//     글로벌 TURN 로그 변수
+// ----------------------------
+std::mutex turn_log_mutex;
+std::ofstream turn_log_file;
+
+// ----------------------------
+//     헬퍼 함수: pj_sockaddr_t를 문자열로 변환
+// ----------------------------
+string sockaddr_to_string(const pj_sockaddr_t* addr, unsigned int addr_len) {
+    char ip[INET6_ADDRSTRLEN];
+    int port = 0;
+    if (addr->addr.sa_family == AF_INET) {
+        struct sockaddr_in* addr_in = (struct sockaddr_in*)addr;
+        inet_ntop(AF_INET, &(addr_in->sin_addr), ip, sizeof(ip));
+        port = ntohs(addr_in->sin_port);
+    } else if (addr->addr.sa_family == AF_INET6) {
+        struct sockaddr_in6* addr_in6 = (struct sockaddr_in6*)addr;
+        inet_ntop(AF_INET6, &(addr_in6->sin6_addr), ip, sizeof(ip));
+        port = ntohs(addr_in6->sin6_port);
+    } else {
+        strcpy(ip, "Unknown");
+    }
+    return string(ip) + ":" + to_string(port);
+}
 
 // ----------------------------
 //     영상 관련 구조체/클래스
@@ -309,7 +336,7 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
-// TURN 데이터 수신 콜백 함수
+// TURN 데이터 수신 콜백 함수 (CSV 기록 기능 추가)
 static void on_rx_data(pj_turn_sock *sock,
                        void *user_data,
                        unsigned int size,
@@ -318,6 +345,20 @@ static void on_rx_data(pj_turn_sock *sock,
 {
     if (size > 0) {
         std::cout << "[TURN] Received data of size: " << size << std::endl;
+        // 현재 시간 (마이크로초 단위)
+        auto now = chrono::system_clock::now();
+        auto now_us = chrono::duration_cast<chrono::microseconds>(now.time_since_epoch()).count();
+        // 송신자 주소 문자열 변환
+        string src_addr_str = sockaddr_to_string(src_addr, addr_len);
+
+        {
+            std::lock_guard<std::mutex> lock(turn_log_mutex);
+            if (turn_log_file.is_open()) {
+                // CSV 형식: 타임스탬프, 데이터 크기, 송신자 주소
+                turn_log_file << now_us << "," << size << "," << src_addr_str << "\n";
+                turn_log_file.flush();
+            }
+        }
     }
 }
 
@@ -347,7 +388,7 @@ void turn_ack_receiver_thread()
         return;
     }
     
-    // **pjlib_util_init() 호출 추가**
+    // pjlib_util 초기화
     status = pjlib_util_init();
     if (status != PJ_SUCCESS) {
         std::cerr << "pjlib_util_init() error" << std::endl;
@@ -384,11 +425,11 @@ void turn_ack_receiver_thread()
     g_turn_callbacks.on_rx_data = &on_rx_data;
 
     status = pj_turn_sock_create(&stun_cfg,
-                                 PJ_AF_INET,                 // flags
-                                 PJ_TURN_TP_UDP,    // UDP
+                                 PJ_AF_INET,      // 주소 패밀리 지정
+                                 PJ_TURN_TP_UDP,  // UDP 전송
                                  &g_turn_callbacks, // 콜백 구조체
-                                 nullptr,           // user_data
-                                 nullptr,           // 소켓 설정
+                                 nullptr,         // user_data
+                                 nullptr,         // 소켓 설정
                                  &turn_sock);
     if (status != PJ_SUCCESS) {
         std::cerr << "pj_turn_sock_create() error" << std::endl;
@@ -414,6 +455,18 @@ void turn_ack_receiver_thread()
         goto on_return;
     }
 
+    // TURN 로그 파일 열기 (스레드 시작 시 단 한 번)
+    {
+        std::lock_guard<std::mutex> lock(turn_log_mutex);
+        turn_log_file.open("turn_log.csv", std::ios::out);
+        if (!turn_log_file.is_open()) {
+            std::cerr << "Failed to open turn_log.csv" << std::endl;
+        } else {
+            // CSV 헤더 기록
+            turn_log_file << "timestamp,size,source_address\n";
+        }
+    }
+
     std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
 
     while (turn_running.load()) {
@@ -432,7 +485,6 @@ on_return:
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
-
 
 // ----------------------------
 // main()
