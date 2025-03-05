@@ -362,7 +362,7 @@ void turn_ack_receiver_thread()
     }
 
     // 4) STUN/TURN 설정 초기화
-    pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, nullptr);
+    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, nullptr);
 
     // 5) 콜백 구조체 준비
     pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
