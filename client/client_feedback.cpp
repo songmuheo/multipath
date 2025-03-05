@@ -293,105 +293,110 @@ private:
 // ----------------------------
 //    TURN ACK 수신 스레드 함수
 // ----------------------------
-void turn_ack_receiver_thread() {
+void turn_ack_receiver_thread()
+{
     pj_status_t status;
 
-    // 1. PJLIB 및 메모리 풀 초기화
+    // ------- [1] 모든 변수 선행 선언 ------
+    pj_caching_pool cp;
+    pj_pool_t     *pool       = nullptr;
+    pj_ioqueue_t  *ioqueue    = nullptr;
+    pj_stun_config stun_cfg;
+    pj_turn_sock  *turn_sock  = nullptr;
+
+    // TURN 서버 / 인증용
+    pj_str_t turn_server;
+    pj_stun_auth_cred auth_cred;
+
+    // PJ 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
-        cerr << "pj_init error" << endl;
+        cerr << "pj_init() error" << endl;
         return;
     }
 
-    pj_caching_pool cp;
     pj_caching_pool_init(&cp, nullptr, 0);
 
-    // 2. STUN/TURN 공용 설정 구조체 초기화
-    pj_stun_config stun_cfg;
-    pj_ioqueue_t *ioqueue;
-    pj_thread_t *thread;
-
-    // 2-1. IOQueue 생성
-    status = pj_ioqueue_create(&cp.factory, 64, &ioqueue);
-    if (status != PJ_SUCCESS) {
-        cerr << "pj_ioqueue_create error" << endl;
+    // ------- [2] 메모리 풀 생성 ------
+    pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
+    if (!pool) {
+        cerr << "Failed to create pool" << endl;
         goto on_return;
     }
 
-    // 2-2. STUN 설정 초기화
-    pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, 0);
-
-    // 2-3. 스레드 생성 (TURN 소켓이 I/O 이벤트를 받을 수 있도록 설정)
-    status = pj_thread_create(pool, "turn_thread", turn_ioqueue_callback, nullptr, 0, 0, &thread);
+    // ------- [3] ioqueue 생성 ------
+    status = pj_ioqueue_create(pool, 64, &ioqueue);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_thread_create error" << endl;
+        cerr << "pj_ioqueue_create() error" << endl;
         goto on_return;
     }
 
-    // 3. TURN 소켓 생성
-    pj_turn_sock *turn_sock = nullptr;
-    status = pj_turn_sock_create(&stun_cfg, 0, PJ_TURN_TP_UDP, nullptr, nullptr, nullptr, &turn_sock);
+    // ------- [4] STUN/TURN 설정 초기화 ------
+    pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, nullptr);
+
+    // ------- [5] TURN 소켓 생성 ------
+    status = pj_turn_sock_create(&stun_cfg,
+                                 0,                // flag=0 (기본값)
+                                 PJ_TURN_TP_UDP,   // 전송방식 (UDP)
+                                 nullptr,          // 콜백 (사용하지 않을 경우 nullptr)
+                                 nullptr,          // 사용자 데이터
+                                 nullptr,          // 소켓 설정 (확장 파라미터 없으면 nullptr)
+                                 &turn_sock);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_create error" << endl;
+        cerr << "pj_turn_sock_create() error" << endl;
         goto on_return;
     }
 
-    // 4. TURN 서버 주소 설정
-    pj_str_t turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-    pj_stun_auth_cred auth_cred;
-    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(TURN_USERNAME));
-    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    auth_cred.data.static_cred.data = pj_str(const_cast<char*>(TURN_PASSWORD));
+    // ------- [6] TURN 서버 주소 및 인증 정보 설정 ------
+    turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
 
-    // 5. TURN 할당 요청 (Relay 주소 획득)
-    status = pj_turn_sock_alloc(turn_sock, &turn_server, TURN_SERVER_PORT, nullptr, &auth_cred, nullptr);
+    auth_cred.type                           = PJ_STUN_AUTH_CRED_STATIC;
+    auth_cred.data.static_cred.username      = pj_str(const_cast<char*>(TURN_USERNAME));
+    auth_cred.data.static_cred.data_type     = PJ_STUN_PASSWD_PLAIN;
+    auth_cred.data.static_cred.data          = pj_str(const_cast<char*>(TURN_PASSWORD));
+
+    // ------- [7] TURN 할당 요청 (Relay 주소 획득) ------
+    status = pj_turn_sock_alloc(turn_sock,
+                                &turn_server,
+                                TURN_SERVER_PORT,
+                                nullptr,       // DNS Resolver (필요 없으면 nullptr)
+                                &auth_cred,
+                                nullptr        // 추가 파라미터 (필요 없으면 nullptr)
+                                );
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_alloc error" << endl;
+        cerr << "pj_turn_sock_alloc() error" << endl;
         goto on_return;
     }
 
     cout << "TURN ACK receiver started. Waiting for ACK messages..." << endl;
 
-    // 6. TURN 메시지 수신
+    // ------- [8] 무한 루프 : TURN 데이터 수신 ------
     while (true) {
-        pj_uint8_t buffer[1024];
-        pj_size_t buffer_len = sizeof(buffer);
+        char        buffer[1024];
+        pj_size_t   buffer_len = sizeof(buffer);
         pj_sockaddr src_addr;
-        pj_size_t addr_len = sizeof(src_addr);
+        pj_size_t   addr_len   = sizeof(src_addr);
 
-        // 최신 PJNATH에서는 `pj_turn_sock_recv_msg()` 사용
-        status = pj_turn_sock_recv_msg(turn_sock, buffer, &buffer_len, &src_addr, &addr_len);
+        // pj_turn_sock_recvfrom() / pj_turn_sock_recv() / pj_turn_sock_recv_msg() 등
+        // 버전에 따라 존재하는 함수를 확인하여 사용.
+        // 여기서는 pj_turn_sock_recvfrom() 예시
+        status = pj_turn_sock_recvfrom(turn_sock, buffer, &buffer_len, 0, &src_addr, &addr_len);
         if (status == PJ_SUCCESS && buffer_len > 0) {
-            cout << "Received TURN ACK: " << string((char*)buffer, buffer_len) << endl;
+            cout << "[TURN] Received ACK: " << string(buffer, buffer_len) << endl;
         }
-        pj_thread_sleep(10);  // 10ms sleep to prevent high CPU usage
+
+        pj_thread_sleep(10);  // 10ms sleep
     }
 
 on_return:
+    // ------- [9] 리소스 정리 ------
     if (turn_sock) {
         pj_turn_sock_destroy(turn_sock);
+        turn_sock = nullptr;
     }
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
-
-
-// ----------------------------
-//    메인 스트리밍 로직 스레드
-// ----------------------------
-void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
-    while (running.load()) {
-        rs2::frameset frames = pipe.wait_for_frames();
-        rs2::video_frame color_frame = frames.get_color_frame();
-        if (!color_frame) continue;
-
-        uint64_t timestamp_frame = chrono::duration_cast<chrono::microseconds>(
-            chrono::system_clock::now().time_since_epoch()).count();
-        streamer.stream(color_frame, timestamp_frame);
-    }
-}
-
 // ----------------------------
 //              main()
 // ----------------------------
