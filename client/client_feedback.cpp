@@ -384,7 +384,7 @@ void turn_ack_receiver_thread()
     g_turn_callbacks.on_rx_data = &on_rx_data;
 
     status = pj_turn_sock_create(&stun_cfg,
-                                 0,                 // flags
+                                 PJ_AF_INET,                 // flags
                                  PJ_TURN_TP_UDP,    // UDP
                                  &g_turn_callbacks, // 콜백 구조체
                                  nullptr,           // user_data
