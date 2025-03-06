@@ -367,7 +367,11 @@ static void poll_turn_data() {
     const int buf_size = 2048;
     char buffer[buf_size];
     while (g_main_loop_is_running(g_main_loop)) {
-        int ret = nice_agent_recv(g_nice_agent, g_stream_id, 1, buf_size, buffer);
+        // nice_agent_recv의 시그니처: (NiceAgent*, guint, guint, guint8*, gsize, GCancellable*, GError**)
+        gssize ret = nice_agent_recv(g_nice_agent, g_stream_id, 1,
+                                     reinterpret_cast<guint8*>(buffer),
+                                     static_cast<gsize>(buf_size),
+                                     nullptr, nullptr);
         if (ret > 0) {
             string ack(buffer, ret);
             cout << "[TURN ACK Received] " << ack << endl;
@@ -397,15 +401,13 @@ static void nice_turn_receiver_thread() {
     g_signal_connect(G_OBJECT(g_nice_agent), "candidate-gathering-done", G_CALLBACK(cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_nice_agent), "component-state-changed", G_CALLBACK(cb_component_state_changed), NULL);
     
-    // 더 이상 "data-received" 시그널이나 nice_agent_set_data_receive_callback()는 사용하지 않습니다.
-    
+    // TURN 데이터 수신은 별도의 폴링 스레드를 통해 진행합니다.
     if (!nice_agent_gather_candidates(g_nice_agent, g_stream_id)) {
         cerr << "Failed to start candidate gathering\n";
         return;
     }
     g_print("Running Nice TURN ack receiver...\n");
     
-    // 별도의 스레드에서 TURN 데이터를 폴링합니다.
     thread poll_thread(poll_turn_data);
     
     g_main_loop_run(g_main_loop);
