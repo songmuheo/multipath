@@ -373,6 +373,27 @@ static pj_turn_sock *turn_sock = nullptr;
 
 atomic<bool> turn_running(true);
 
+// HMAC-SHA1 결과를 raw binary 형태로 반환하는 함수
+std::string compute_turn_password_bin(const std::string& data, const std::string& secret) {
+    unsigned char hmac_result[EVP_MAX_MD_SIZE];
+    unsigned int hmac_length = 0;
+    HMAC(EVP_sha1(),
+         reinterpret_cast<const unsigned char*>(secret.c_str()), secret.size(),
+         reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
+         hmac_result, &hmac_length);
+    // raw binary 데이터를 std::string에 담아서 반환 (std::string은 binary safe)
+    return std::string(reinterpret_cast<const char*>(hmac_result), hmac_length);
+}
+
+// 디버그용: raw binary 데이터를 hex 문자열로 변환하는 함수
+std::string bin_to_hex(const std::string& bin) {
+    std::ostringstream oss;
+    for (unsigned char c : bin) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << (int)c;
+    }
+    return oss.str();
+}
+
 static void turn_ack_receiver_thread()
 {
     pj_status_t status;
@@ -449,7 +470,9 @@ static void turn_ack_receiver_thread()
         // TURN_IDENTIFIER는 "client_id" 등 서버와 다른 값이어야 함!
         g_ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
         // HMAC 계산: "ephemeral_username:TURN_REALM"과 TURN_SECRET(static-auth-secret)
-        g_ephemeral_password = compute_turn_password_hex(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
+        g_ephemeral_password = compute_turn_password_bin(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
+
+        // g_ephemeral_password = compute_turn_password_hex(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
         uint64_t now_epoch = chrono::duration_cast<chrono::seconds>(
             chrono::system_clock::now().time_since_epoch()
         ).count();
@@ -459,7 +482,7 @@ static void turn_ack_receiver_thread()
         std::cerr << "[DEBUG] TURN_SECRET (static)    : " << TURN_SECRET << std::endl;
         std::cerr << "[DEBUG] TURN_IDENTIFIER         : " << TURN_IDENTIFIER << std::endl;
         std::cerr << "[DEBUG] ephemeral_username      : " << g_ephemeral_username << std::endl;
-        std::cerr << "[DEBUG] ephemeral_password(hex) : " << g_ephemeral_password << std::endl;
+        std::cerr << "[DEBUG] ephemeral_password(hex) : " << bin_to_hex(g_ephemeral_password) << std::endl;
     }
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(g_ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
