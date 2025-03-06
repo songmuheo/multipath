@@ -7,6 +7,8 @@
 
 const char* SERVER_IP = "121.128.220.205";
 const int SERVER_PORT = 12345;
+const int SERVER_REG_PORT = 12345;
+
 
 const int PACKET_SIZE = 1500;
 const float PACKET_INTERVAL = 0.033;
