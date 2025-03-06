@@ -1,7 +1,7 @@
 # configs/config.yaml
 
 # Setting
-mode: train  # 'train' 또는 'eval'
+mode: eval  # 'train' 또는 'eval'
 algorithm: 'PPO'  # 'DQN' or 'PPO' 'RDQN'
 delay_steps: 2
 
@@ -18,7 +18,7 @@ load_model_path:  # start initial state
 
 # evaluation mode
 num_eval_episodes: 1
-model_path: /home/songmu/multipath/rl/results/2025_02_21_20_19/models/ppo_model_episode280.pth
+model_path: /home/songmu/multipath/rl/results/2025_03_04_21_39/models/ppo_model_episode170.pth
 
 # log path
 frame_dir: /home/songmu/multipath/client/logs/2025_02_17_14_14/frames_with_sequence

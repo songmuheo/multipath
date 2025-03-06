@@ -1,3 +1,4 @@
+// client.cpp
 #include <iostream>
 #include <fstream>
 #include <atomic>
@@ -7,6 +8,8 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <mutex>
+#include <condition_variable>
 #include <opencv2/opencv.hpp>
 #include <librealsense2/rs.hpp>
 #include <arpa/inet.h>
@@ -18,7 +21,7 @@
 #include <cstring>
 #include "config.h"
 
-// OpenSSL (HMAC 계산용)
+// OpenSSL 헤더 (HMAC 계산용)
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 
@@ -37,34 +40,53 @@ extern "C" {
 #include <pjnath.h>
 }
 
-#include <mutex>
-#include <condition_variable>
-
 using namespace std;
 namespace fs = std::filesystem;
 
-// 전역 TURN 할당 정보
-atomic<bool> turn_allocation_done(false);
-struct sockaddr_in turn_relay_addr; // TURN 할당받은 릴레이 주소 저장
-mutex turn_mutex;
-condition_variable turn_cv;
+//
+// BufferedLogger: 로그를 내부 버퍼에 쓰고, 소멸 시 flush하는 클래스
+//
+class BufferedLogger {
+public:
+    BufferedLogger(const string& filepath) {
+        log_stream.open(filepath, ios::out | ios::app);
+        if (!log_stream.is_open()) {
+            throw runtime_error("Failed to open log file: " + filepath);
+        }
+    }
+    ~BufferedLogger() {
+        flush();
+        log_stream.close();
+    }
+    void log(const string& message) {
+        lock_guard<mutex> lock(log_mutex);
+        log_stream << message << "\n";
+    }
+    void flush() {
+        lock_guard<mutex> lock(log_mutex);
+        log_stream.flush();
+    }
+private:
+    ofstream log_stream;
+    mutex log_mutex;
+};
 
-// ----------------------------
-// 영상 패킷 헤더 (TURN 릴레이 주소 포함)
-// ----------------------------
+//
+// 영상 전송 관련 구조체
+//
 struct PacketHeader {
     uint64_t timestamp_frame;
     uint64_t timestamp_sending;
     uint32_t sequence_number;
-    uint32_t relay_ip;    // TURN 릴레이 IP (네트워크 바이트 오더)
-    uint16_t relay_port;  // TURN 릴레이 포트 (네트워크 바이트 오더)
 };
 
-// ----- TURN Credential Helper Functions -----
+//
+// TURN 관련 헬퍼 함수들
+//
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
-    uint64_t expiration = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
-    return std::to_string(expiration) + ":" + identifier;
+    uint64_t expiration = chrono::duration_cast<chrono::seconds>(
+                              chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
+    return to_string(expiration) + ":" + identifier;
 }
 
 std::string compute_turn_password(const std::string& data, const std::string& secret) {
@@ -74,29 +96,33 @@ std::string compute_turn_password(const std::string& data, const std::string& se
          secret.c_str(), secret.size(),
          reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
          hmac_result, &hmac_length);
-    std::ostringstream oss;
+    ostringstream oss;
     for (unsigned int i = 0; i < hmac_length; i++) {
-        oss << std::hex << std::setw(2) << std::setfill('0') << (int)hmac_result[i];
+        oss << hex << setw(2) << setfill('0') << (int)hmac_result[i];
     }
     return oss.str();
 }
-// ---------------------------------------------- //
 
+//
+// VideoStreamer 클래스
+//
 class VideoStreamer {
 public:
     VideoStreamer() : frame_counter(0), sequence_number(0) {
         create_and_set_output_folders();
-        open_log_file();
 
-        // 1) 코덱 찾기
+        // BufferedLogger를 이용하여 로그 파일을 버퍼링하며 기록 (CSV 헤더 기록)
+        string logFilePath = logs_folder + "/packet_log.csv";
+        logger = make_unique<BufferedLogger>(logFilePath);
+        logger->log("sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type");
+
+        // FFmpeg 코덱 초기화
         codec = avcodec_find_encoder_by_name("libx264");
         if (!codec) throw runtime_error("Codec not found");
 
-        // 2) 코덱 컨텍스트 할당
         codec_ctx.reset(avcodec_alloc_context3(codec));
         if (!codec_ctx) throw runtime_error("Could not allocate video codec context");
 
-        // 3) 기본 설정
         codec_ctx->width = WIDTH;
         codec_ctx->height = HEIGHT;
         codec_ctx->time_base = {1, FPS};
@@ -105,33 +131,18 @@ public:
         codec_ctx->max_b_frames = 0;
         codec_ctx->gop_size = 10;
 
-        // 4) libx264 옵션 설정
         AVDictionary* opt = nullptr;
         av_dict_set(&opt, "preset", "veryfast", 0);
         av_dict_set(&opt, "tune", "zerolatency", 0);
         av_dict_set(&opt, "crf", "26", 0);
-
-        string x264_params =
-            "keyint=10:"
-            "min-keyint=10:"
-            "scenecut=0:"
-            "bframes=0:"
-            "force-cfr=1:"
-            "rc-lookahead=0:"
-            "ref=1:"
-            "sliced-threads=0:"
-            "aq-mode=1:"
-            "trellis=0:"
-            "psy-rd=1.0:1.0";
+        string x264_params = "keyint=10:min-keyint=10:scenecut=0:bframes=0:force-cfr=1:rc-lookahead=0:ref=1:sliced-threads=0:aq-mode=1:trellis=0:psy-rd=1.0:1.0";
         av_dict_set(&opt, "x264-params", x264_params.c_str(), 0);
 
-        // 5) 코덱 오픈
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0) {
             throw runtime_error("Could not open codec");
         }
         av_dict_free(&opt);
 
-        // 6) 프레임/패킷 구조체 할당
         frame.reset(av_frame_alloc());
         if (!frame) throw runtime_error("Could not allocate video frame");
         frame->format = codec_ctx->pix_fmt;
@@ -143,14 +154,14 @@ public:
         pkt.reset(av_packet_alloc());
         if (!pkt) throw runtime_error("Could not allocate AVPacket");
 
-        // 7) 소켓 생성 및 바인딩
+        // 영상 전송용 UDP 소켓 생성 및 바인딩 (두 인터페이스)
         sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
         sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
         servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
         servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
 
-        // 8) 색상 변환 컨텍스트 (YUYV422 → YUV420P)
+        // 색상 변환 컨텍스트 (YUYV422 → YUV420P)
         sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422,
                                  WIDTH, HEIGHT, AV_PIX_FMT_YUV420P,
                                  SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -158,12 +169,14 @@ public:
     }
 
     ~VideoStreamer() {
-        close(sockfd1);
-        close(sockfd2);
-        sws_freeContext(sws_ctx);
-        log_file.close();
+        if (sockfd1 >= 0) close(sockfd1);
+        if (sockfd2 >= 0) close(sockfd2);
+        if (sws_ctx) sws_freeContext(sws_ctx);
     }
 
+    atomic<int> sequence_number;
+
+    // 영상 프레임을 받아 전송 (실제 UDP 전송)
     void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
         frame->pts = frame_counter++;
 
@@ -176,12 +189,11 @@ public:
             return;
         }
 
+        // (선택사항) 프레임을 이미지로 저장
         save_frame(color_frame, timestamp_frame);
         encode_and_send_frame(timestamp_frame);
     }
-
-    atomic<int> sequence_number;
-
+    
 private:
     void create_and_set_output_folders() {
         auto now = chrono::system_clock::now();
@@ -189,7 +201,7 @@ private:
         tm local_time = *localtime(&time_now);
         char folder_name[100];
         strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
-        string base_folder = FILEPATH_LOG + string(folder_name);
+        string base_folder = SAVE_FILEPATH + string(folder_name);
         fs::create_directories(base_folder);
         frames_folder = base_folder + "/frames";
         logs_folder   = base_folder + "/logs";
@@ -197,8 +209,8 @@ private:
         fs::create_directories(logs_folder);
     }
 
-    struct sockaddr_in create_sockaddr(const char* ip, int port) {
-        struct sockaddr_in addr = {};
+    sockaddr_in create_sockaddr(const char* ip, int port) {
+        sockaddr_in addr = {};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         addr.sin_addr.s_addr = inet_addr(ip);
@@ -212,7 +224,7 @@ private:
             close(sockfd);
             throw runtime_error("SO_BINDTODEVICE failed");
         }
-        struct sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
+        sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
         if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
             close(sockfd);
             throw runtime_error("Bind failed");
@@ -237,37 +249,29 @@ private:
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
             PacketHeader header;
             header.timestamp_frame = timestamp_frame;
-            header.timestamp_sending =
-                chrono::duration_cast<chrono::microseconds>(
-                    chrono::system_clock::now().time_since_epoch()).count();
+            header.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
+                chrono::system_clock::now().time_since_epoch()).count();
             header.sequence_number = sequence_number++;
-
-            // TURN 할당이 완료될 때까지 대기 후, 할당받은 릴레이 주소를 헤더에 포함
-            {
-                unique_lock<mutex> lock(turn_mutex);
-                turn_cv.wait(lock, []{ return turn_allocation_done.load(); });
-            }
-            header.relay_ip = turn_relay_addr.sin_addr.s_addr;
-            header.relay_port = turn_relay_addr.sin_port; // 네트워크 바이트 오더
-
-            double encoding_latency =
-                (header.timestamp_sending - header.timestamp_frame) / 1000.0;
+            double encoding_latency = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
             string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-            log_packet_to_csv(sequence_number - 1, pkt->size,
-                              header.timestamp_frame,
-                              header.timestamp_sending,
-                              frame->pts,
-                              encoding_latency,
-                              frame_type);
-            auto send_task1 = async(launch::async, [this, &packet_data] {
+
+            // 로그 기록 (버퍼된 로그)
+            ostringstream logMsg;
+            logMsg << (sequence_number - 1) << "," << frame->pts << "," << pkt->size << ","
+                   << header.timestamp_frame << "," << header.timestamp_sending << ","
+                   << encoding_latency << "," << frame_type;
+            logger->log(logMsg.str());
+
+            // 두 인터페이스로 비동기 전송
+            auto send_task1 = async(launch::async, [this, &packet_data]() {
                 if (sendto(sockfd1, packet_data.data(), packet_data.size(), 0,
                            (const struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
                     cerr << "Error sending packet on interface 1: " << strerror(errno) << endl;
             });
-            auto send_task2 = async(launch::async, [this, &packet_data] {
+            auto send_task2 = async(launch::async, [this, &packet_data]() {
                 if (sendto(sockfd2, packet_data.data(), packet_data.size(), 0,
                            (const struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0)
                     cerr << "Error sending packet on interface 2: " << strerror(errno) << endl;
@@ -281,26 +285,6 @@ private:
         }
     }
 
-    void open_log_file() {
-        log_file.open(logs_folder + "/packet_log.csv");
-        if (!log_file.is_open())
-            throw runtime_error("Failed to open CSV log file");
-        log_file << "sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type\n";
-    }
-
-    void log_packet_to_csv(int sequence_number, int size,
-                           uint64_t timestamp, uint64_t sendtime,
-                           int64_t pts, double encoding_latency,
-                           const string& frame_type) {
-        log_file << sequence_number << ","
-                 << pts << ","
-                 << size << ","
-                 << timestamp << ","
-                 << sendtime << ","
-                 << encoding_latency << ","
-                 << frame_type << "\n";
-    }
-
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{
         nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }
@@ -311,161 +295,187 @@ private:
     unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{
         nullptr, [](AVPacket* p) { av_packet_free(&p); }
     };
-
     SwsContext* sws_ctx = nullptr;
-    ofstream log_file;
+    unique_ptr<BufferedLogger> logger;
     int sockfd1, sockfd2;
-    struct sockaddr_in servaddr1, servaddr2;
+    sockaddr_in servaddr1, servaddr2;
     atomic<int> frame_counter;
     string frames_folder;
     string logs_folder;
 };
 
-// ----------------------------
-// TURN 데이터 수신 콜백 함수
-// ----------------------------
-static void on_rx_data(pj_turn_sock *sock,
-                       void *user_data,
-                       unsigned int size,
-                       const pj_sockaddr *src_addr,
-                       unsigned int addr_len)
-{
-    if (size > 0) {
-        std::cout << "[TURN] Received data of size: " << size << std::endl;
-    }
-}
-
-// TURN 콜백 구조체
-static pj_turn_sock_cb g_turn_callbacks;
-
-// 전역 종료 플래그 (TURN 스레드용)
+//
+// TURN ACK 수신 및 등록 스레드 (TURN 소켓 이용)
+//
 atomic<bool> turn_running{true};
 
-// ----------------------------
-// TURN ACK 수신 스레드 (할당 및 수신)
-// ----------------------------
-void turn_ack_receiver_thread()
-{
+void turn_ack_receiver_thread() {
     pj_status_t status;
     pj_caching_pool cp;
-    pj_pool_t *pool = nullptr;
-    pj_ioqueue_t *ioqueue = nullptr;
-    pj_stun_config stun_cfg;
-    pj_timer_heap_t *timer_heap = nullptr;
-    pj_turn_sock *turn_sock = nullptr;
+    pj_pool_t* pool = nullptr;
+    pj_ioqueue_t* ioqueue = nullptr;
+    pj_timer_heap_t* timer_heap = nullptr;
+    pj_turn_sock* turn_sock = nullptr;
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
-    pj_sockaddr peer_addr;
-    pj_sockaddr relay_addr;
-    pj_str_t ip_str;
-    std::string ephemeral_username;
-    std::string ephemeral_password;
 
-    status = pj_init();
-    if (status != PJ_SUCCESS) {
-        std::cerr << "pj_init() error" << std::endl;
-        goto on_return;
-    }
-    status = pjlib_util_init();
-    if (status != PJ_SUCCESS) {
-        std::cerr << "pjlib_util_init() error" << std::endl;
-        goto on_return;
-    }
-    
-    pj_caching_pool_init(&cp, nullptr, 0);
-    pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
-    if (!pool) {
-        std::cerr << "Failed to create pool" << std::endl;
-        goto on_return;
-    }
-    status = pj_ioqueue_create(pool, 64, &ioqueue);
-    if (status != PJ_SUCCESS) {
-        std::cerr << "pj_ioqueue_create() error" << std::endl;
-        goto on_return;
-    }
-    status = pj_timer_heap_create(pool, 128, &timer_heap);
-    if (status != PJ_SUCCESS) {
-        std::cerr << "pj_timer_heap_create() error" << std::endl;
-        goto on_return;
-    }
-    pj_bzero(&stun_cfg, sizeof(stun_cfg));
-    pj_stun_config_init(&stun_cfg, &cp.factory, PJ_AF_INET, ioqueue, timer_heap);
-    pj_bzero(&g_turn_callbacks, sizeof(g_turn_callbacks));
-    g_turn_callbacks.on_rx_data = &on_rx_data;
-    status = pj_turn_sock_create(&stun_cfg,
-                                 PJ_AF_INET,
-                                 PJ_TURN_TP_UDP,
-                                 &g_turn_callbacks,
-                                 nullptr,
-                                 nullptr,
-                                 &turn_sock);
-    if (status != PJ_SUCCESS) {
-        std::cerr << "pj_turn_sock_create() error" << std::endl;
-        goto on_return;
-    }
+    // 로컬 TURN 할당용 주소 (모바일 네트워크 인터페이스)
+    pj_sockaddr turn_local;
+    pj_bzero(&turn_local, sizeof(turn_local));
+    turn_local.addr.sa_family = PJ_AF_INET;
+    ((pj_sockaddr_in*)&turn_local)->sin_addr.s_addr = inet_addr(MOBILE_INTERFACE_IP);
+    ((pj_sockaddr_in*)&turn_local)->sin_port = 0; // 시스템 할당
+
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-    ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
+
+    // 동적 자격증명 생성
+    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    std::string ephemeral_password = compute_turn_password(ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     auth_cred.data.static_cred.data = pj_str(const_cast<char*>(ephemeral_password.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    status = pj_turn_sock_alloc(
-        turn_sock,
-        &turn_server,
-        TURN_SERVER_PORT,
-        nullptr,
-        &auth_cred,
-        nullptr
-    );
+
+    status = pj_init();
     if (status != PJ_SUCCESS) {
-        std::cerr << "pj_turn_sock_alloc() error" << std::endl;
-        goto on_return;
+        cerr << "pj_init() error" << endl;
+        return;
     }
-    ip_str = pj_str(const_cast<char*>(SERVER_IP));
-    status = pj_sockaddr_parse(PJ_AF_INET, 0, &ip_str, &peer_addr);
+    status = pjlib_util_init();
     if (status != PJ_SUCCESS) {
-        std::cerr << "pj_sockaddr_parse() error" << std::endl;
-        goto on_return;
+        cerr << "pjlib_util_init() error" << endl;
+        pj_shutdown();
+        return;
+    }
+    pj_caching_pool_init(&cp, nullptr, 0);
+    pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
+    if (!pool) {
+        cerr << "Failed to create pool" << endl;
+        pj_shutdown();
+        return;
+    }
+    status = pj_ioqueue_create(pool, 64, &ioqueue);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_ioqueue_create() error" << endl;
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
+    }
+    status = pj_timer_heap_create(pool, 128, &timer_heap);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_timer_heap_create() error" << endl;
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
+    }
+
+    // TURN 소켓 콜백 등록 (간단히 데이터 수신시 로그)
+    static pj_turn_sock_cb turn_callbacks;
+    pj_bzero(&turn_callbacks, sizeof(turn_callbacks));
+    turn_callbacks.on_rx_data = [](pj_turn_sock* sock, void* user_data, unsigned int size,
+                                     const pj_sockaddr_t* src_addr, unsigned int addr_len) {
+        if (size > 0) {
+            cout << "[TURN] Received data of size: " << size << endl;
+        }
+    };
+
+    status = pj_turn_sock_create(nullptr, PJ_AF_INET, PJ_TURN_TP_UDP, &turn_callbacks, nullptr, nullptr, &turn_sock);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_turn_sock_create() error" << endl;
+        pj_timer_heap_destroy(timer_heap);
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
+    }
+
+    status = pj_turn_sock_alloc(turn_sock, &turn_server, TURN_SERVER_PORT, &turn_local, &auth_cred, nullptr);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_turn_sock_alloc() error" << endl;
+        pj_turn_sock_destroy(turn_sock);
+        pj_timer_heap_destroy(timer_heap);
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
+    }
+
+    pj_str_t srv_ip_str = pj_str(const_cast<char*>(SERVER_IP));
+    pj_sockaddr peer_addr;
+    status = pj_sockaddr_parse(PJ_AF_INET, 0, &srv_ip_str, &peer_addr);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_sockaddr_parse() error" << endl;
+        pj_turn_sock_destroy(turn_sock);
+        pj_timer_heap_destroy(timer_heap);
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
     }
     status = pj_turn_sock_set_perm(turn_sock, 1, &peer_addr, sizeof(peer_addr));
     if (status != PJ_SUCCESS) {
-        std::cerr << "pj_turn_sock_set_perm() error" << std::endl;
-        goto on_return;
+        cerr << "pj_turn_sock_set_perm() error" << endl;
+        pj_turn_sock_destroy(turn_sock);
+        pj_timer_heap_destroy(timer_heap);
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
     }
-    status = pj_turn_sock_get_info(turn_sock, &relay_addr);
-    if (status == PJ_SUCCESS) {
-        memcpy(&turn_relay_addr, &relay_addr, sizeof(sockaddr_in));
-        {
-            lock_guard<mutex> lock(turn_mutex);
-            turn_allocation_done.store(true);
-        }
-        turn_cv.notify_all();
-        char buf[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &turn_relay_addr.sin_addr, buf, sizeof(buf));
-        std::cout << "TURN allocated relay address: " << buf << ":" << ntohs(turn_relay_addr.sin_port) << std::endl;
+
+    pj_sockaddr relay_addr;
+    unsigned int relay_addr_len = sizeof(relay_addr);
+    status = pj_turn_sock_get_rel_addr(turn_sock, &relay_addr, &relay_addr_len);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_turn_sock_get_rel_addr() error" << endl;
+        pj_turn_sock_destroy(turn_sock);
+        pj_timer_heap_destroy(timer_heap);
+        pj_ioqueue_destroy(ioqueue);
+        pj_pool_release(pool);
+        pj_shutdown();
+        return;
+    }
+    char relay_ip[32];
+    pj_inet_ntop(PJ_AF_INET, &((pj_sockaddr_in*)&relay_addr)->sin_addr, relay_ip, sizeof(relay_ip));
+    uint16_t relay_port = ntohs(((pj_sockaddr_in*)&relay_addr)->sin_port);
+    cout << "TURN allocated relay address: " << relay_ip << ":" << relay_port << endl;
+
+    // 클라이언트의 TURN relay 주소를 서버에 등록하는 메시지 전송
+    string reg_msg = "TURN_REG:" + string(relay_ip) + ":" + to_string(relay_port);
+    pj_str_t reg_str = pj_str(const_cast<char*>(reg_msg.c_str()));
+    pj_sockaddr server_reg_addr;
+    status = pj_sockaddr_parse(PJ_AF_INET, SERVER_REG_PORT, pj_str(const_cast<char*>(SERVER_IP)), &server_reg_addr);
+    if (status != PJ_SUCCESS) {
+        cerr << "pj_sockaddr_parse() for registration failed" << endl;
     } else {
-        std::cerr << "Failed to get TURN relay address" << std::endl;
+        status = pj_turn_sock_sendto(turn_sock, &reg_str, &server_reg_addr, sizeof(server_reg_addr));
+        if (status != PJ_SUCCESS) {
+            cerr << "Failed to send TURN registration message" << endl;
+        } else {
+            cout << "TURN registration message sent to server." << endl;
+        }
     }
-    std::cout << "TURN ACK receiver started. (callback-based)" << std::endl;
+
+    cout << "TURN ACK receiver started. Entering polling loop." << endl;
     while (turn_running.load()) {
+        pj_ioqueue_poll(ioqueue, 10);
         pj_thread_sleep(10);
     }
-on_return:
-    if (turn_sock) {
-        pj_turn_sock_destroy(turn_sock);
-        turn_sock = nullptr;
-    }
-    if (timer_heap) {
-        pj_timer_heap_destroy(timer_heap);
-        timer_heap = nullptr;
-    }
+
+    // 종료 처리: 자원 해제
+    pj_turn_sock_destroy(turn_sock);
+    pj_timer_heap_destroy(timer_heap);
+    pj_ioqueue_destroy(ioqueue);
+    pj_pool_release(pool);
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
 
-void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running)
-{
+//
+// 클라이언트 영상 스트림 처리 스레드
+//
+void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
     while (running.load()) {
         rs2::frameset frames = pipe.wait_for_frames();
         rs2::video_frame color_frame = frames.get_color_frame();
@@ -476,6 +486,9 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
+//
+// main()
+//
 int main() {
     try {
         rs2::pipeline pipe;
@@ -485,28 +498,20 @@ int main() {
 
         VideoStreamer streamer;
 
-        // TURN ACK 수신 스레드 시작
-        thread turn_thread(turn_ack_receiver_thread);
-
-        // TURN 할당 완료될 때까지 대기
-        {
-            unique_lock<mutex> lock(turn_mutex);
-            turn_cv.wait(lock, []{ return turn_allocation_done.load(); });
-        }
-
         atomic<bool> running(true);
         thread client_thread(client_stream, ref(streamer), ref(pipe), ref(running));
+
+        // TURN ACK 수신 스레드 시작
+        thread turn_thread(turn_ack_receiver_thread);
 
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
         running.store(false);
-        client_thread.join();
-
         turn_running.store(false);
+        client_thread.join();
         turn_thread.join();
-    }
-    catch (const exception& e) {
+    } catch (const exception& e) {
         cerr << "Error: " << e.what() << endl;
         return EXIT_FAILURE;
     }

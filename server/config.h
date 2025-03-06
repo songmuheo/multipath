@@ -9,6 +9,7 @@ const char* SERVER_IP = "121.128.220.205";
 
 const int SERVER_PORT1 = 12345; //lg
 const int SERVER_PORT2 = 12346; //kt
+const int SERVER_REG_PORT = 12345; // TURN 등록 메시지 수신용 (SERVER_PORT1와 동일)
 
 const int BUFFER_SIZE = 65536;
 
