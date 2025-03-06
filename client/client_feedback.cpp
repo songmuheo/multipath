@@ -450,6 +450,10 @@ static void turn_ack_receiver_thread()
     pj_bzero(&auth_cred, sizeof(auth_cred));
     auth_cred.type= PJ_STUN_AUTH_CRED_STATIC;
 
+    uint64_t expiration = chrono::duration_cast<chrono::seconds>(
+                          chrono::system_clock::now().time_since_epoch()
+                      ).count() + validSeconds;
+
     string ephemeral_username= generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     // string ephemeral_password= compute_turn_password(
     //     ephemeral_username + ":" + TURN_REALM,
@@ -460,9 +464,14 @@ static void turn_ack_receiver_thread()
     TURN_SECRET
     );
     // 
- std::cerr << "[DEBUG] local epoch now     : " << now_epoch << std::endl;
-std::cerr << "[DEBUG] ephemeral_username : " << ephemeral_username << std::endl;
-std::cerr << "[DEBUG] expiration         : " << expiration << " (+" << validSeconds << " from now)\n";
+    uint64_t now_epoch = chrono::duration_cast<chrono::seconds>(
+                        chrono::system_clock::now().time_since_epoch()
+                    ).count();
+    std::cerr << "[DEBUG] local epoch now     : " << now_epoch << std::endl;
+    std::cerr << "[DEBUG] ephemeral_username : " << ephemeral_username << std::endl;
+    std::cerr << "[DEBUG] ephemeral_password_bin.size()=" << ephemeral_password_bin.size() << "\n";
+
+    std::cerr << "[DEBUG] expiration         : " << expiration << " (+" << validSeconds << " from now)\n";
     std::cerr << "[DEBUG] ephemeral_password_bin(hex)=";
     for (unsigned char c : ephemeral_password_bin) {
         std::cerr << std::hex << std::setw(2) << std::setfill('0')
