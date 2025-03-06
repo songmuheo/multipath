@@ -1,4 +1,4 @@
-// client.cpp
+// client_feedback.cpp
 #include <iostream>
 #include <fstream>
 #include <atomic>
@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <cerrno>
 #include <cstring>
+#include <netdb.h> // 추가: NI_MAXHOST 정의를 위해
 #include "config.h"
 
 // OpenSSL (HMAC, EVP)
@@ -39,6 +40,11 @@ extern "C" {
 
 using namespace std;
 namespace fs = std::filesystem;
+
+// 만약 NICE_RELAY_TURN가 정의되어 있지 않으면 NICE_RELAY_TYPE_TURN_TLS로 정의
+#ifndef NICE_RELAY_TURN
+#define NICE_RELAY_TURN NICE_RELAY_TYPE_TURN_TLS
+#endif
 
 //─────────────────────────────────────────────────────────────────────────────
 // Base64 인코더 및 HMAC-SHA1, TURN username/password 생성 함수들
@@ -87,9 +93,9 @@ std::string compute_turn_password(const std::string& user_with_timestamp_and_col
 }
 
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
-    uint64_t expiration = chrono::duration_cast<chrono::seconds>(
-        chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
-    return to_string(expiration) + ":" + identifier;
+    uint64_t expiration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
+    return std::to_string(expiration) + ":" + identifier;
 }
 
 //─────────────────────────────────────────────────────────────────────────────
@@ -354,17 +360,15 @@ static void nice_turn_receiver_thread() {
         return;
     }
     g_stream_id = nice_agent_add_stream(g_nice_agent, 1);
-    // TURN 설정: libnice에서는 set_turn_info() 대신 set_turn_info()가 없으면 set_relay_info()를 사용
     string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     string ephemeral_password = compute_turn_password(ephemeral_username, TURN_REALM, TURN_SECRET);
-    if (!nice_agent_set_turn_info(g_nice_agent, g_stream_id, TURN_SERVER_IP, TURN_SERVER_PORT,
-                                  ephemeral_username.c_str(), ephemeral_password.c_str())) {
-        // 만약 set_turn_info()가 없으면, set_relay_info()로 대체합니다.
-        if (!nice_agent_set_relay_info(g_nice_agent, g_stream_id, TURN_SERVER_IP, TURN_SERVER_PORT,
-                                       ephemeral_username.c_str(), ephemeral_password.c_str())) {
-            cerr << "Failed to set TURN/relay info\n";
-            return;
-        }
+    // libnice TURN 설정: set_turn_info() 대신 set_relay_info()를 사용
+    if (!nice_agent_set_relay_info(g_nice_agent, g_stream_id, 1,
+                                   TURN_SERVER_IP, TURN_SERVER_PORT,
+                                   ephemeral_username.c_str(), ephemeral_password.c_str(),
+                                   NICE_RELAY_TURN)) {
+        cerr << "Failed to set TURN/relay info\n";
+        return;
     }
     g_signal_connect(G_OBJECT(g_nice_agent), "candidate-gathering-done", G_CALLBACK(cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_nice_agent), "component-state-changed", G_CALLBACK(cb_component_state_changed), NULL);
