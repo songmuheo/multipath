@@ -19,7 +19,7 @@
 #include <filesystem>
 #include <cerrno>
 #include <cstring>
-#include <netdb.h> // 추가: NI_MAXHOST 정의를 위해
+#include <netdb.h> // NI_MAXHOST 정의를 위해
 #include "config.h"
 
 // OpenSSL (HMAC, EVP)
@@ -307,7 +307,7 @@ static atomic<bool> nice_turn_ready(false);
 
 static void cb_candidate_gathering_done(NiceAgent *agent, guint stream_id, gpointer user_data) {
     g_print("Candidate gathering done for stream %u\n", stream_id);
-        // 모든 로컬 후보 목록 출력
+    // 모든 로컬 후보 목록 출력
     GSList *candidates = nice_agent_get_local_candidates(agent, stream_id, 1);
     for (GSList *iter = candidates; iter; iter = iter->next) {
         NiceCandidate *cand = (NiceCandidate*)iter->data;
@@ -354,11 +354,26 @@ static void cb_component_state_changed(NiceAgent *agent, guint stream_id, guint 
     }
 }
 
+// 기존의 cb_data_received는 더 이상 g_signal_connect()로 등록하지 않습니다.
 static gboolean cb_data_received(NiceAgent *agent, guint stream_id, guint component_id,
                                  guint len, gchar *buf, gpointer user_data) {
     string ack(buf, len);
     cout << "[TURN ACK Received] " << ack << endl;
     return TRUE;
+}
+
+// TURN 데이터를 수신하기 위해 nice_agent_recv()를 폴링하는 스레드 함수
+static void poll_turn_data() {
+    const int buf_size = 2048;
+    char buffer[buf_size];
+    while (g_main_loop_is_running(g_main_loop)) {
+        int ret = nice_agent_recv(g_nice_agent, g_stream_id, 1, buf_size, buffer);
+        if (ret > 0) {
+            string ack(buffer, ret);
+            cout << "[TURN ACK Received] " << ack << endl;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 static void nice_turn_receiver_thread() {
@@ -372,7 +387,6 @@ static void nice_turn_receiver_thread() {
     g_stream_id = nice_agent_add_stream(g_nice_agent, 1);
     string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     string ephemeral_password = compute_turn_password(ephemeral_username, TURN_REALM, TURN_SECRET);
-    // libnice TURN 설정: set_turn_info() 대신 set_relay_info()를 사용
     if (!nice_agent_set_relay_info(g_nice_agent, g_stream_id, 1,
                                    TURN_SERVER_IP, TURN_SERVER_PORT,
                                    ephemeral_username.c_str(), ephemeral_password.c_str(),
@@ -382,13 +396,20 @@ static void nice_turn_receiver_thread() {
     }
     g_signal_connect(G_OBJECT(g_nice_agent), "candidate-gathering-done", G_CALLBACK(cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_nice_agent), "component-state-changed", G_CALLBACK(cb_component_state_changed), NULL);
-    g_signal_connect(G_OBJECT(g_nice_agent), "data-received", G_CALLBACK(cb_data_received), NULL);
+    
+    // 더 이상 "data-received" 시그널이나 nice_agent_set_data_receive_callback()는 사용하지 않습니다.
+    
     if (!nice_agent_gather_candidates(g_nice_agent, g_stream_id)) {
         cerr << "Failed to start candidate gathering\n";
         return;
     }
     g_print("Running Nice TURN ack receiver...\n");
+    
+    // 별도의 스레드에서 TURN 데이터를 폴링합니다.
+    thread poll_thread(poll_turn_data);
+    
     g_main_loop_run(g_main_loop);
+    poll_thread.join();
     g_object_unref(g_nice_agent);
     g_main_loop_unref(g_main_loop);
 }

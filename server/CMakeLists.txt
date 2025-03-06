@@ -49,7 +49,7 @@ link_directories(/usr/lib/x86_64-linux-gnu)  # 필요 시 /usr/local/lib 로 변
 
 
 # 실행 파일 설정
-add_executable(server server.cpp)
+# add_executable(server server.cpp)
 add_executable(server_feedback server_feedback.cpp)
 
 include_directories(
@@ -61,12 +61,12 @@ include_directories(
 )
 
 # server 실행 파일 연결 라이브러리
-target_link_libraries(server
-    ${OpenCV_LIBS}
-    ${FFMPEG_LIBRARIES}
-    ${CUDA_LIBRARIES}
-    Threads::Threads
-)
+# target_link_libraries(server
+#     ${OpenCV_LIBS}
+#     ${FFMPEG_LIBRARIES}
+#     ${CUDA_LIBRARIES}
+#     Threads::Threads
+# )
 
 # server_feedback 실행 파일에 필요한 라이브러리 연결 (PJSIP, libnice, OpenSSL 등)
 target_link_libraries(server_feedback

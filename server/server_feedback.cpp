@@ -1,4 +1,3 @@
-// server_feedback.cpp
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -83,6 +82,8 @@ void server_setup_turn_info() {
                                    server_username.c_str(), server_password.c_str(),
                                    NICE_RELAY_TURN)) {
         cerr << "Server: Failed to set relay info\n";
+    } else {
+        g_print("Server: Relay info set successfully\n");
     }
 }
 
@@ -202,10 +203,14 @@ static void server_cb_candidate_gathering_done(NiceAgent *agent, guint stream_id
 
 static void server_cb_component_state_changed(NiceAgent *agent, guint stream_id, guint component_id, guint state, gpointer user_data) {
     g_print("Server: Component %u state changed to %u\n", component_id, state);
-    if (state == NICE_COMPONENT_STATE_READY)
+    if (state == NICE_COMPONENT_STATE_READY) {
         server_turn_ready = true;
+        g_print("Server: Component %u is ready (TURN 서버 연결 성공)\n", component_id);
+    }
 }
 
+// 원래 데이터 수신 콜백은 sender에서는 사용되지 않으므로 함수는 남겨두되,
+// 실제 등록은 하지 않습니다.
 static gboolean server_cb_data_received(NiceAgent *agent, guint stream_id, guint component_id,
                                           guint len, gchar *buf, gpointer user_data) {
     g_print("Server: Data received via TURN (should not happen on sender): %u bytes\n", len);
@@ -225,7 +230,8 @@ static void server_turn_sender_thread() {
     server_setup_turn_info();
     g_signal_connect(G_OBJECT(g_server_agent), "candidate-gathering-done", G_CALLBACK(server_cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_server_agent), "component-state-changed", G_CALLBACK(server_cb_component_state_changed), NULL);
-    g_signal_connect(G_OBJECT(g_server_agent), "data-received", G_CALLBACK(server_cb_data_received), NULL);
+    // 데이터 수신에 대한 콜백은 sender에서는 사용되지 않으므로 등록하지 않습니다.
+    // (이전에는 nice_agent_set_recv()를 사용하려 했으나, 해당 함수는 존재하지 않습니다.)
     if (!nice_agent_gather_candidates(g_server_agent, g_server_stream_id)) {
         cerr << "Server: Failed to start candidate gathering\n";
         return;
@@ -307,8 +313,6 @@ void receive_packets(int port, BufferedLogger& logger) {
         // TURN_REG 메시지 처리
         if (len >= 9 && strncmp(buffer, "TURN_REG:", 9) == 0) {
             string reg_msg(buffer, len);
-            g_print("Server received TURN_REG message: %s\n", reg_msg.c_str());
-
             size_t pos1 = reg_msg.find(":");
             size_t pos2 = reg_msg.find(":", pos1 + 1);
             if (pos1 != string::npos && pos2 != string::npos) {

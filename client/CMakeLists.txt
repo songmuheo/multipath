@@ -45,14 +45,14 @@ include_directories(${NICE_INCLUDE_DIRS})
 link_directories(${NICE_LIBRARY_DIRS})
 
 # 실행 파일 추가
-add_executable(client client.cpp)
-target_link_libraries(client
-    ${realsense2_LIBRARY}
-    ${OpenCV_LIBS}
-    ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE}
+# add_executable(client client.cpp)
+# target_link_libraries(client
+#     ${realsense2_LIBRARY}
+#     ${OpenCV_LIBS}
+#     ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE}
 
-    pthread
-)
+#     pthread
+# )
 
 add_executable(client_feedback client_feedback.cpp)
 target_link_libraries(client_feedback
