@@ -467,7 +467,7 @@ static void turn_ack_receiver_thread()
     const_cast<char*>(ephemeral_password_bin.data());
 auth_cred.data.static_cred.data.slen =
     (pj_ssize_t)ephemeral_password_bin.size();
-    
+
     status= pj_turn_sock_alloc(
         turn_sock,
         &turnServer,
