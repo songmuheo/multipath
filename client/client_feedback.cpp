@@ -459,13 +459,25 @@ static void turn_ack_receiver_thread()
     ephemeral_username + ":" + TURN_REALM,
     TURN_SECRET
     );
+    // 
+    std::cerr << "[DEBUG] local epoch now=" << ... << "\n";
+    std::cerr << "[DEBUG] ephemeral_username=" << ephemeral_username << "\n";
+    std::cerr << "[DEBUG] ephemeral_password_bin.size()=" << ephemeral_password_bin.size() << "\n";
+    // 16진수 출력
+    std::cerr << "[DEBUG] ephemeral_password_bin(hex)=";
+    for (unsigned char c : ephemeral_password_bin) {
+        std::cerr << std::hex << std::setw(2) << std::setfill('0')
+                << (unsigned int)c;
+    }
+    std::cerr << std::dec << "\n"; // dec로 복원
+    // 
 
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
     // auth_cred.data.static_cred.data= pj_str(const_cast<char*>(ephemeral_password.c_str()));
     auth_cred.data.static_cred.data_type= PJ_STUN_PASSWD_PLAIN;
     auth_cred.data.static_cred.data.ptr =
     const_cast<char*>(ephemeral_password_bin.data());
-auth_cred.data.static_cred.data.slen =
+    auth_cred.data.static_cred.data.slen =
     (pj_ssize_t)ephemeral_password_bin.size();
 
     status= pj_turn_sock_alloc(
