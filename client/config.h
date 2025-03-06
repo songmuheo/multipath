@@ -38,10 +38,6 @@ const char* MOBILE_INTERFACE_IP = "192.168.10.101";
 #define TURN_REALM "v2n2v"
 #define TURN_SECRET "v2n2v123"
 
-// 영상 해상도 설정
-const int HEIGHT = 480;
-const int WIDTH = 640;
-
 const int HEIGHT = 480;
 const int WIDTH = 640;
 

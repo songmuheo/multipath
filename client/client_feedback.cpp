@@ -1,4 +1,4 @@
-// client.cpp
+// client_feedback.cpp
 #include <iostream>
 #include <fstream>
 #include <atomic>
@@ -19,7 +19,7 @@
 #include <filesystem>
 #include <cerrno>
 #include <cstring>
-#include "config.h"
+#include "config.h"  // client/config.h
 
 // OpenSSL 헤더 (HMAC 계산용)
 #include <openssl/hmac.h>
@@ -44,7 +44,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 //
-// BufferedLogger: 로그를 내부 버퍼에 쓰고, 소멸 시 flush하는 클래스
+// BufferedLogger: 로그를 내부 버퍼에 기록하는 클래스
 //
 class BufferedLogger {
 public:
@@ -111,7 +111,7 @@ public:
     VideoStreamer() : frame_counter(0), sequence_number(0) {
         create_and_set_output_folders();
 
-        // BufferedLogger를 이용하여 로그 파일을 버퍼링하며 기록 (CSV 헤더 기록)
+        // BufferedLogger를 이용하여 로그 파일 버퍼링 (CSV 헤더 기록)
         string logFilePath = logs_folder + "/packet_log.csv";
         logger = make_unique<BufferedLogger>(logFilePath);
         logger->log("sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type");
@@ -176,7 +176,7 @@ public:
 
     atomic<int> sequence_number;
 
-    // 영상 프레임을 받아 전송 (실제 UDP 전송)
+    // 영상 프레임 전송 (UDP 전송)
     void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
         frame->pts = frame_counter++;
 
@@ -319,13 +319,8 @@ void turn_ack_receiver_thread() {
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
-    // 로컬 TURN 할당용 주소 (모바일 네트워크 인터페이스)
-    pj_sockaddr turn_local;
-    pj_bzero(&turn_local, sizeof(turn_local));
-    turn_local.addr.sa_family = PJ_AF_INET;
-    ((pj_sockaddr_in*)&turn_local)->sin_addr.s_addr = inet_addr(MOBILE_INTERFACE_IP);
-    ((pj_sockaddr_in*)&turn_local)->sin_port = 0; // 시스템 할당
-
+    // 로컬 TURN 할당용 주소를 사용하지 않고, resolver가 필요 없으므로 NULL 전달
+    // (만약 로컬 인터페이스 지정이 필요하다면 별도의 API 호출을 확인)
     turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
 
     // 동적 자격증명 생성
@@ -370,7 +365,7 @@ void turn_ack_receiver_thread() {
         return;
     }
 
-    // TURN 소켓 콜백 등록 (간단히 데이터 수신시 로그)
+    // TURN 소켓 콜백 등록 (데이터 수신 시 간단히 로그 출력)
     static pj_turn_sock_cb turn_callbacks;
     pj_bzero(&turn_callbacks, sizeof(turn_callbacks));
     turn_callbacks.on_rx_data = [](pj_turn_sock* sock, void* user_data, unsigned int size,
@@ -390,7 +385,8 @@ void turn_ack_receiver_thread() {
         return;
     }
 
-    status = pj_turn_sock_alloc(turn_sock, &turn_server, TURN_SERVER_PORT, &turn_local, &auth_cred, nullptr);
+    // 네 번째 인자: resolver가 필요하므로 NULL 전달 (로컬 주소 지정은 별도 API로 처리)
+    status = pj_turn_sock_alloc(turn_sock, &turn_server, TURN_SERVER_PORT, NULL, &auth_cred, nullptr);
     if (status != PJ_SUCCESS) {
         cerr << "pj_turn_sock_alloc() error" << endl;
         pj_turn_sock_destroy(turn_sock);
@@ -401,34 +397,12 @@ void turn_ack_receiver_thread() {
         return;
     }
 
-    pj_str_t srv_ip_str = pj_str(const_cast<char*>(SERVER_IP));
-    pj_sockaddr peer_addr;
-    status = pj_sockaddr_parse(PJ_AF_INET, 0, &srv_ip_str, &peer_addr);
-    if (status != PJ_SUCCESS) {
-        cerr << "pj_sockaddr_parse() error" << endl;
-        pj_turn_sock_destroy(turn_sock);
-        pj_timer_heap_destroy(timer_heap);
-        pj_ioqueue_destroy(ioqueue);
-        pj_pool_release(pool);
-        pj_shutdown();
-        return;
-    }
-    status = pj_turn_sock_set_perm(turn_sock, 1, &peer_addr, sizeof(peer_addr));
-    if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_set_perm() error" << endl;
-        pj_turn_sock_destroy(turn_sock);
-        pj_timer_heap_destroy(timer_heap);
-        pj_ioqueue_destroy(ioqueue);
-        pj_pool_release(pool);
-        pj_shutdown();
-        return;
-    }
-
+    // TURN 할당된 relay 주소 가져오기 (함수명 수정: get_relay_addr)
     pj_sockaddr relay_addr;
     unsigned int relay_addr_len = sizeof(relay_addr);
-    status = pj_turn_sock_get_rel_addr(turn_sock, &relay_addr, &relay_addr_len);
+    status = pj_turn_sock_get_relay_addr(turn_sock, &relay_addr, &relay_addr_len);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_get_rel_addr() error" << endl;
+        cerr << "pj_turn_sock_get_relay_addr() error" << endl;
         pj_turn_sock_destroy(turn_sock);
         pj_timer_heap_destroy(timer_heap);
         pj_ioqueue_destroy(ioqueue);
@@ -449,7 +423,8 @@ void turn_ack_receiver_thread() {
     if (status != PJ_SUCCESS) {
         cerr << "pj_sockaddr_parse() for registration failed" << endl;
     } else {
-        status = pj_turn_sock_sendto(turn_sock, &reg_str, &server_reg_addr, sizeof(server_reg_addr));
+        status = pj_turn_sock_sendto(turn_sock, reinterpret_cast<const pj_uint8_t*>(reg_str.ptr),
+                                     reg_str.slen, &server_reg_addr, sizeof(server_reg_addr));
         if (status != PJ_SUCCESS) {
             cerr << "Failed to send TURN registration message" << endl;
         } else {
@@ -459,7 +434,10 @@ void turn_ack_receiver_thread() {
 
     cout << "TURN ACK receiver started. Entering polling loop." << endl;
     while (turn_running.load()) {
-        pj_ioqueue_poll(ioqueue, 10);
+        pj_time_val timeout;
+        timeout.sec = 0;
+        timeout.msec = 10;
+        pj_ioqueue_poll(ioqueue, &timeout);
         pj_thread_sleep(10);
     }
 
