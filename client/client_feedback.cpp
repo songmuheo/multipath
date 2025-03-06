@@ -400,7 +400,7 @@ void turn_ack_receiver_thread() {
     // TURN 할당된 relay 주소 가져오기 (함수명 수정: get_relay_addr)
     pj_sockaddr relay_addr;
     unsigned int relay_addr_len = sizeof(relay_addr);
-    status = pj_turn_sock_get_rel_addr(turn_sock, &relay_addr, &relay_addr_len);
+    status = pj_turn_sock_get_relay_addr(turn_sock, &relay_addr, &relay_addr_len);
     if (status != PJ_SUCCESS) {
         cerr << "pj_turn_sock_get_relay_addr() error" << endl;
         pj_turn_sock_destroy(turn_sock);
@@ -419,6 +419,8 @@ void turn_ack_receiver_thread() {
     string reg_msg = "TURN_REG:" + string(relay_ip) + ":" + to_string(relay_port);
     pj_str_t reg_str = pj_str(const_cast<char*>(reg_msg.c_str()));
     pj_sockaddr server_reg_addr;
+    pj_str_t server_ip_str = pj_str(const_cast<char*>(SERVER_IP));
+
     status = pj_sockaddr_parse(PJ_AF_INET, SERVER_REG_PORT, pj_str(const_cast<char*>(SERVER_IP)), &server_reg_addr);
     if (status != PJ_SUCCESS) {
         cerr << "pj_sockaddr_parse() for registration failed" << endl;
