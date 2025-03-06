@@ -35,7 +35,11 @@ static guint g_server_stream_id = 0;
 static GMainLoop *g_server_loop = nullptr;
 static atomic<bool> server_turn_ready(false);
 
-// TURN credential 관련 함수 (예시)
+// 전역 TURN 인증 정보 (한 번만 생성해서 재사용)
+static string g_turn_username;
+static string g_turn_password;
+
+// TURN credential 관련 함수
 std::string base64_encode(const std::string& input) {
     std::ostringstream out;
     int val = 0, valb = -6;
@@ -71,15 +75,45 @@ std::string generate_turn_username(const std::string& identifier, uint32_t valid
     return std::to_string(expiration) + ":" + identifier;
 }
 
-// server_setup_turn_info() 함수: libnice의 nice_agent_set_relay_info() 사용
+// TURN 인증 정보를 초기화 (한 번만 호출)
+// void initialize_turn_credentials() {
+//     // TURN_IDENTIFIER, TURN_VALID_SECONDS, TURN_REALM, TURN_SECRET는 config.h에서 정의됨
+//     g_turn_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+//     g_turn_password = compute_turn_password(g_turn_username, TURN_REALM, TURN_SECRET);
+//     cout << "Initialized TURN credentials: username=" << g_turn_username << endl;
+// }
+
+// // server_setup_turn_info() 함수: libnice의 nice_agent_set_relay_info() 사용
+// void server_setup_turn_info() {
+//     if (g_turn_username.empty()) {
+//         initialize_turn_credentials();
+//     }
+//     if (!nice_agent_set_relay_info(g_server_agent, g_server_stream_id, 1,
+//                                    TURN_SERVER_IP, TURN_SERVER_PORT,
+//                                    g_turn_username.c_str(), g_turn_password.c_str(),
+//                                    NICE_RELAY_TURN)) {
+//         cerr << "Server: Failed to set relay info\n";
+//     } else {
+//         g_print("Server: Relay info set successfully\n");
+//     }
+// }
+
+// static string g_turn_username;
+// static string g_turn_password;
+void initialize_turn_credentials() {
+    // TURN_IDENTIFIER, TURN_VALID_SECONDS, TURN_REALM, TURN_SECRET는 config.h에 정의됨
+    g_turn_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    g_turn_password = compute_turn_password(g_turn_username, TURN_REALM, TURN_SECRET);
+    cout << "Initialized TURN credentials: username=" << g_turn_username << endl;
+}
+
 void server_setup_turn_info() {
-    string server_username = "server_user";
-    // TURN password 생성 (예시)
-    string server_password = compute_turn_password(server_username, TURN_REALM, TURN_SECRET);
-    // 인자: agent, stream_id, component_id, relay_addr, relay_port, username, password, relay type
+    if (g_turn_username.empty()) {
+        initialize_turn_credentials();
+    }
     if (!nice_agent_set_relay_info(g_server_agent, g_server_stream_id, 1,
                                    TURN_SERVER_IP, TURN_SERVER_PORT,
-                                   server_username.c_str(), server_password.c_str(),
+                                   g_turn_username.c_str(), g_turn_password.c_str(),
                                    NICE_RELAY_TURN)) {
         cerr << "Server: Failed to set relay info\n";
     } else {
@@ -209,8 +243,7 @@ static void server_cb_component_state_changed(NiceAgent *agent, guint stream_id,
     }
 }
 
-// 원래 데이터 수신 콜백은 sender에서는 사용되지 않으므로 함수는 남겨두되,
-// 실제 등록은 하지 않습니다.
+// 데이터 수신 콜백 (실제로 사용되지는 않음)
 static gboolean server_cb_data_received(NiceAgent *agent, guint stream_id, guint component_id,
                                           guint len, gchar *buf, gpointer user_data) {
     g_print("Server: Data received via TURN (should not happen on sender): %u bytes\n", len);
@@ -230,8 +263,7 @@ static void server_turn_sender_thread() {
     server_setup_turn_info();
     g_signal_connect(G_OBJECT(g_server_agent), "candidate-gathering-done", G_CALLBACK(server_cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_server_agent), "component-state-changed", G_CALLBACK(server_cb_component_state_changed), NULL);
-    // 데이터 수신에 대한 콜백은 sender에서는 사용되지 않으므로 등록하지 않습니다.
-    // (이전에는 nice_agent_set_recv()를 사용하려 했으나, 해당 함수는 존재하지 않습니다.)
+    // 데이터 수신 콜백은 등록하지 않습니다.
     if (!nice_agent_gather_candidates(g_server_agent, g_server_stream_id)) {
         cerr << "Server: Failed to start candidate gathering\n";
         return;
@@ -252,7 +284,6 @@ static void set_remote_candidate(const string &ip, int port) {
     // 원격 후보 생성
     NiceCandidate *rcand = nice_candidate_new(NICE_CANDIDATE_TYPE_RELAYED);
     rcand->component_id = 1;
-    // protocol 멤버는 더 이상 사용되지 않으므로 제거
     nice_address_set_from_string(&rcand->addr, ip.c_str());
     nice_address_set_port(&rcand->addr, port);
     GSList *rcand_list = NULL;
