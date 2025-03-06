@@ -20,6 +20,7 @@
 #include <cerrno>
 #include <cstring>
 #include "config.h"  // WIDTH, HEIGHT, FPS, SERVER_IP, SERVER_PORT 등 매크로 정의
+                        // TURN_SERVER_IP, TURN_SERVER_PORT, TURN_REALM, TURN_SECRET, TURN_IDENTIFIER, TURN_VALID_SECONDS
 
 // OpenSSL
 #include <openssl/hmac.h>
@@ -43,9 +44,10 @@ extern "C" {
 using namespace std;
 namespace fs = std::filesystem;
 
-// 전역 변수 : ephemeral username과 비밀번호를 한 번만 생성
+// 전역 변수 : ephemeral username과 비밀번호는 한 번만 생성
+// 여기서 TURN_IDENTIFIER는 TURN 서버와 다른 값(예:"client_id")이어야 합니다.
 static std::string g_ephemeral_username;
-static std::string g_ephemeral_password;  // 이전의 raw binary 대신 hex 문자열 사용
+static std::string g_ephemeral_password;  // hex 문자열 형태
 
 // --- 디버깅 로그 클래스 ---
 class BufferedLogger {
@@ -79,7 +81,7 @@ struct PacketHeader {
     uint32_t sequence_number;
 };
 
-// username 생성 (예: "만료시간:client_id")
+// username 생성: "<expiration>:<TURN_IDENTIFIER>"
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
     uint64_t expiration = chrono::duration_cast<chrono::seconds>(
         chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
@@ -442,17 +444,22 @@ static void turn_ack_receiver_thread()
     pj_bzero(&auth_cred, sizeof(auth_cred));
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
 
-    // username과 비밀번호는 한 번만 생성하여 사용 (여기서 hex 인코딩된 비밀번호 사용)
+    // username과 비밀번호는 한 번만 생성하여 사용
     if (g_ephemeral_username.empty()) {
+        // TURN_IDENTIFIER는 "client_id" 등 서버와 다른 값이어야 함!
         g_ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+        // HMAC 계산: "ephemeral_username:TURN_REALM"과 TURN_SECRET(static-auth-secret)
         g_ephemeral_password = compute_turn_password_hex(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
         uint64_t now_epoch = chrono::duration_cast<chrono::seconds>(
             chrono::system_clock::now().time_since_epoch()
         ).count();
-        // 디버그: 생성된 값들을 콘솔에 출력하여 확인
-        std::cerr << "[DEBUG] local epoch now     : " << now_epoch << std::endl;
-        std::cerr << "[DEBUG] ephemeral_username  : " << g_ephemeral_username << std::endl;
-        std::cerr << "[DEBUG] ephemeral_password(hex): " << g_ephemeral_password << std::endl;
+        // 디버그: 생성된 값들을 출력하여 확인
+        std::cerr << "[DEBUG] local epoch now         : " << now_epoch << std::endl;
+        std::cerr << "[DEBUG] TURN_REALM              : " << TURN_REALM << std::endl;
+        std::cerr << "[DEBUG] TURN_SECRET (static)    : " << TURN_SECRET << std::endl;
+        std::cerr << "[DEBUG] TURN_IDENTIFIER         : " << TURN_IDENTIFIER << std::endl;
+        std::cerr << "[DEBUG] ephemeral_username      : " << g_ephemeral_username << std::endl;
+        std::cerr << "[DEBUG] ephemeral_password(hex) : " << g_ephemeral_password << std::endl;
     }
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(g_ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
