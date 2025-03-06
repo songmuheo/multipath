@@ -423,6 +423,10 @@ atomic<bool> turn_running{true};
 static void turn_ack_receiver_thread()
 {
     pj_status_t status;
+    pj_caching_pool cp;
+    pj_pool_t *pool = nullptr;
+    pj_ioqueue_t *ioqueue = nullptr;
+    pj_timer_heap_t *timer_heap = nullptr;
 
     // 1) pjlib 초기화
     status = pj_init();
@@ -440,6 +444,13 @@ static void turn_ack_receiver_thread()
     // 2) caching pool
     pj_caching_pool_init(&cp, nullptr, 0);
     pool = pj_pool_create(&cp.factory, "turn_pool", 4000, 4000, nullptr);
+
+    // 2) ioqueue, timer_heap 만들기
+    status = pj_ioqueue_create(pool, 32, &ioqueue);
+    if (status != PJ_SUCCESS) { ... error ... }
+
+    status = pj_timer_heap_create(pool, 32, &timer_heap);
+    if (status != PJ_SUCCESS) { ... error ... }
 
     pj_stun_config stun_cfg;
     pj_stun_config_init(&stun_cfg, &cp.factory, 0, nullptr, nullptr);
@@ -537,6 +548,15 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
 
 int main() {
     try {
+        while (running) {
+    // ioqueue poll
+    pj_time_val delay = {0, 10};
+    pj_ioqueue_poll(ioqueue, &delay);
+
+    // timer poll
+    pj_timer_heap_poll(timer_heap, NULL);
+    pj_thread_sleep(10);
+}
         rs2::pipeline pipe;
         rs2::config cfg;
         cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
