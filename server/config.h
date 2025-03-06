@@ -24,7 +24,7 @@ const uint64_t PLAY_DELAY_MS = 50;
 // TURN 관련 설정 (coturn 서버와 일치시켜야 함)
 #define TURN_SERVER_IP "121.128.220.205"
 #define TURN_SERVER_PORT 3478
-#define TURN_IDENTIFIER "v2n2v"          // 클라이언트를 식별할 문자열
+#define TURN_IDENTIFIER "client_id"          // 클라이언트를 식별할 문자열
 #define TURN_VALID_SECONDS 3600                 // 유효 시간 (초)
 #define TURN_REALM "v2n2v"
 #define TURN_SECRET "v2n2v123"
