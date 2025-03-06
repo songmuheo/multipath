@@ -45,8 +45,9 @@ namespace fs = std::filesystem;
 
 // 전역 변수 : ephemeral username과 비밀번호를 한 번만 생성
 static std::string g_ephemeral_username;
-static std::string g_ephemeral_password_bin;
+static std::string g_ephemeral_password;  // 이전의 raw binary 대신 hex 문자열 사용
 
+// --- 디버깅 로그 클래스 ---
 class BufferedLogger {
 public:
     BufferedLogger(const string& filepath) {
@@ -78,24 +79,27 @@ struct PacketHeader {
     uint32_t sequence_number;
 };
 
+// username 생성 (예: "만료시간:client_id")
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
     uint64_t expiration = chrono::duration_cast<chrono::seconds>(
         chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
     return to_string(expiration) + ":" + identifier;
 }
 
-std::string compute_turn_password_bin(const std::string& data, const std::string& secret) {
+// HMAC-SHA1 결과를 hex 문자열로 변환하는 함수
+std::string compute_turn_password_hex(const std::string& data, const std::string& secret) {
     unsigned char hmac_result[EVP_MAX_MD_SIZE];
     unsigned int hmac_length = 0;
-    memset(hmac_result, 0, sizeof(hmac_result));
-
     HMAC(EVP_sha1(),
-         secret.c_str(), secret.size(),
+         reinterpret_cast<const unsigned char*>(secret.c_str()), secret.size(),
          reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
          hmac_result, &hmac_length);
 
-    // raw binary 결과 반환
-    return std::string(reinterpret_cast<const char*>(hmac_result), hmac_length);
+    std::ostringstream oss;
+    for (unsigned int i = 0; i < hmac_length; ++i) {
+        oss << std::hex << std::setw(2) << std::setfill('0') << (int)hmac_result[i];
+    }
+    return oss.str();
 }
 
 // TURN 콜백 함수들
@@ -357,7 +361,7 @@ private:
 };
 
 //
-// TURN 관련
+// TURN 관련 글로벌 변수 및 스레드 처리
 //
 static pj_caching_pool g_cp;
 static pj_pool_t *g_pool = nullptr;
@@ -438,27 +442,22 @@ static void turn_ack_receiver_thread()
     pj_bzero(&auth_cred, sizeof(auth_cred));
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
 
-    // 만약 g_ephemeral_username이 비어있다면 한 번만 생성
+    // username과 비밀번호는 한 번만 생성하여 사용 (여기서 hex 인코딩된 비밀번호 사용)
     if (g_ephemeral_username.empty()) {
         g_ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-        g_ephemeral_password_bin = compute_turn_password_bin(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
+        g_ephemeral_password = compute_turn_password_hex(g_ephemeral_username + ":" + TURN_REALM, TURN_SECRET);
         uint64_t now_epoch = chrono::duration_cast<chrono::seconds>(
             chrono::system_clock::now().time_since_epoch()
         ).count();
+        // 디버그: 생성된 값들을 콘솔에 출력하여 확인
         std::cerr << "[DEBUG] local epoch now     : " << now_epoch << std::endl;
-        std::cerr << "[DEBUG] ephemeral_username : " << g_ephemeral_username << std::endl;
-        std::cerr << "[DEBUG] ephemeral_password_bin.size()=" << g_ephemeral_password_bin.size() << "\n";
-        std::cerr << "[DEBUG] ephemeral_password_bin(hex)=";
-        for (unsigned char c : g_ephemeral_password_bin) {
-            std::cerr << std::hex << std::setw(2) << std::setfill('0')
-                      << (unsigned int)c;
-        }
-        std::cerr << std::dec << "\n";
+        std::cerr << "[DEBUG] ephemeral_username  : " << g_ephemeral_username << std::endl;
+        std::cerr << "[DEBUG] ephemeral_password(hex): " << g_ephemeral_password << std::endl;
     }
     auth_cred.data.static_cred.username = pj_str(const_cast<char*>(g_ephemeral_username.c_str()));
     auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-    auth_cred.data.static_cred.data.ptr = const_cast<char*>(g_ephemeral_password_bin.data());
-    auth_cred.data.static_cred.data.slen = (pj_ssize_t)g_ephemeral_password_bin.size();
+    auth_cred.data.static_cred.data.ptr = const_cast<char*>(g_ephemeral_password.c_str());
+    auth_cred.data.static_cred.data.slen = (pj_ssize_t)g_ephemeral_password.size();
 
     status = pj_turn_sock_alloc(
         turn_sock,
