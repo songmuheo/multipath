@@ -460,7 +460,7 @@ static void turn_ack_receiver_thread()
     TURN_SECRET
     );
     // 
-    std::cerr << "[DEBUG] local epoch now=" << ... << "\n";
+    std::cerr << "[DEBUG] local epoch now=" << "..." << "\n";
     std::cerr << "[DEBUG] ephemeral_username=" << ephemeral_username << "\n";
     std::cerr << "[DEBUG] ephemeral_password_bin.size()=" << ephemeral_password_bin.size() << "\n";
     // 16진수 출력
