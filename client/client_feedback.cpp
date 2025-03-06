@@ -79,17 +79,30 @@ std::string generate_turn_username(const std::string& identifier, uint32_t valid
         chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
     return to_string(expiration) + ":" + identifier;
 }
-std::string compute_turn_password(const std::string& data, const std::string& secret) {
-    unsigned char hmac_result[EVP_MAX_MD_SIZE] = {0};
+// std::string compute_turn_password(const std::string& data, const std::string& secret) {
+//     unsigned char hmac_result[EVP_MAX_MD_SIZE] = {0};
+//     unsigned int hmac_length = 0;
+//     HMAC(EVP_sha1(), secret.c_str(), secret.size(),
+//          reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
+//          hmac_result, &hmac_length);
+//     ostringstream oss;
+//     for(unsigned i=0; i<hmac_length;i++){
+//         oss<< hex<< setw(2)<< setfill('0')<< (int)hmac_result[i];
+//     }
+//     return oss.str();
+// }
+std::string compute_turn_password_bin(const std::string& data, const std::string& secret) {
+    unsigned char hmac_result[EVP_MAX_MD_SIZE];
     unsigned int hmac_length = 0;
-    HMAC(EVP_sha1(), secret.c_str(), secret.size(),
+    memset(hmac_result, 0, sizeof(hmac_result));
+
+    HMAC(EVP_sha1(),
+         secret.c_str(), secret.size(),
          reinterpret_cast<const unsigned char*>(data.c_str()), data.size(),
          hmac_result, &hmac_length);
-    ostringstream oss;
-    for(unsigned i=0; i<hmac_length;i++){
-        oss<< hex<< setw(2)<< setfill('0')<< (int)hmac_result[i];
-    }
-    return oss.str();
+
+    // raw binary
+    return std::string(reinterpret_cast<const char*>(hmac_result), hmac_length);
 }
 
 // TURN 콜백
@@ -438,14 +451,23 @@ static void turn_ack_receiver_thread()
     auth_cred.type= PJ_STUN_AUTH_CRED_STATIC;
 
     string ephemeral_username= generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    string ephemeral_password= compute_turn_password(
-        ephemeral_username + ":" + TURN_REALM,
-        TURN_SECRET
+    // string ephemeral_password= compute_turn_password(
+    //     ephemeral_username + ":" + TURN_REALM,
+    //     TURN_SECRET
+    // );
+    std::string ephemeral_password_bin = compute_turn_password_bin(
+    ephemeral_username + ":" + TURN_REALM,
+    TURN_SECRET
     );
-    auth_cred.data.static_cred.username= pj_str(const_cast<char*>(ephemeral_username.c_str()));
-    auth_cred.data.static_cred.data= pj_str(const_cast<char*>(ephemeral_password.c_str()));
-    auth_cred.data.static_cred.data_type= PJ_STUN_PASSWD_PLAIN;
 
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
+    // auth_cred.data.static_cred.data= pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    auth_cred.data.static_cred.data_type= PJ_STUN_PASSWD_PLAIN;
+    auth_cred.data.static_cred.data.ptr =
+    const_cast<char*>(ephemeral_password_bin.data());
+auth_cred.data.static_cred.data.slen =
+    (pj_ssize_t)ephemeral_password_bin.size();
+    
     status= pj_turn_sock_alloc(
         turn_sock,
         &turnServer,
