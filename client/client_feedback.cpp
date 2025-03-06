@@ -349,53 +349,50 @@ private:
 // TURN ACK 수신 스레드
 //
 atomic<bool> turn_running{true};
-
-void turn_ack_receiver_thread() {
+void turn_ack_receiver_thread()
+{
     pj_status_t status;
     pj_caching_pool cp;
     pj_pool_t* pool = nullptr;
     pj_ioqueue_t* ioqueue = nullptr;
     pj_timer_heap_t* timer_heap = nullptr;
     pj_turn_sock* turn_sock = nullptr;
+
+    // "cfg" (pj_stun_config)
+    pj_stun_config stun_cfg;
+
+    // callback
+    static pj_turn_sock_cb turn_callbacks;
+
     pj_str_t turn_server;
     pj_stun_auth_cred auth_cred;
 
-    turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
-
-    // 동적 username/password 생성
-    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
-    std::string ephemeral_password = compute_turn_password(
-        ephemeral_username + ":" + TURN_REALM, TURN_SECRET
-    );
-    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
-    auth_cred.data.static_cred.data     = pj_str(const_cast<char*>(ephemeral_password.c_str()));
-    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
-
-    // PJ 초기화
+    // 1) 라이브러리 초기화
     status = pj_init();
     if (status != PJ_SUCCESS) {
-        cerr << "pj_init() error" << endl;
+        PJ_LOG(1,("TAG","pj_init error"));
         return;
     }
     status = pjlib_util_init();
     if (status != PJ_SUCCESS) {
-        cerr << "pjlib_util_init() error" << endl;
+        PJ_LOG(1,("TAG","pjlib_util_init error"));
         pj_shutdown();
         return;
     }
 
     pj_caching_pool_init(&cp, nullptr, 0);
-    pool = pj_pool_create(&cp.factory, "turn_ack_pool", 4000, 4000, nullptr);
+
+    // 2) 메모리 풀, ioqueue, timer_heap
+    pool = pj_pool_create(&cp.factory, "turn_pool", 4000, 4000, nullptr);
     if (!pool) {
-        cerr << "Failed to create pool" << endl;
+        PJ_LOG(1,("TAG","Failed to create pool"));
         pj_shutdown();
         return;
     }
 
     status = pj_ioqueue_create(pool, 64, &ioqueue);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_ioqueue_create() error" << endl;
+        PJ_LOG(1,("TAG","pj_ioqueue_create error"));
         pj_pool_release(pool);
         pj_shutdown();
         return;
@@ -403,28 +400,60 @@ void turn_ack_receiver_thread() {
 
     status = pj_timer_heap_create(pool, 128, &timer_heap);
     if (status != PJ_SUCCESS) {
-        cerr << "pj_timer_heap_create() error" << endl;
+        PJ_LOG(1,("TAG","pj_timer_heap_create error"));
         pj_ioqueue_destroy(ioqueue);
         pj_pool_release(pool);
         pj_shutdown();
         return;
     }
 
-    // TURN 소켓 콜백 등록
-    static pj_turn_sock_cb turn_callbacks;
+    // 3) stun_config 초기화
+    pj_stun_config_init(&stun_cfg, &cp.factory, 0, ioqueue, timer_heap);
+
+    // 4) TURN 서버 주소, 인증정보 세팅
+    turn_server = pj_str(const_cast<char*>(TURN_SERVER_IP));
+
+    // 예: username = "만료시간:식별자"
+    std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
+    // password = HMAC(...)
+    std::string ephemeral_password = compute_turn_password(
+        ephemeral_username + ":" + TURN_REALM, TURN_SECRET
+    );
+
+    auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
+    auth_cred.data.static_cred.username = pj_str(const_cast<char*>(ephemeral_username.c_str()));
+    auth_cred.data.static_cred.data     = pj_str(const_cast<char*>(ephemeral_password.c_str()));
+    auth_cred.data.static_cred.data_type = PJ_STUN_PASSWD_PLAIN;
+
+    // 5) TURN 소켓 콜백
     pj_bzero(&turn_callbacks, sizeof(turn_callbacks));
-    turn_callbacks.on_rx_data = [](pj_turn_sock* sock, void* user_data, unsigned int size,
-                                   const pj_sockaddr_t* src_addr, unsigned int addr_len) {
+    turn_callbacks.on_rx_data = [](pj_turn_sock* sock,
+                                   void* user_data,
+                                   unsigned int size,
+                                   const pj_sockaddr_t* src_addr,
+                                   unsigned int addr_len)
+    {
         if (size > 0) {
-            cout << "[TURN] Received data of size: " << size << endl;
+            PJ_LOG(3,("TAG","[TURN] Received data of size: %d", size));
         }
     };
 
-    // ★★★ 수정 포인트: pool과 ioqueue를 넘겨야 함 ★★★
-    status = pj_turn_sock_create(pool, PJ_AF_INET, PJ_TURN_TP_UDP,
-                                 &turn_callbacks, nullptr, ioqueue, &turn_sock);
+    // 6) TURN 소켓 옵션(필요 시)
+    pj_turn_sock_cfg turn_sock_cfg;
+    pj_turn_sock_cfg_default(&turn_sock_cfg); // 혹은 bzero
+
+    // 7) 소켓 생성 (이 버전에서는 &stun_cfg를 첫 인자로)
+    status = pj_turn_sock_create(
+        &stun_cfg,                // 첫 인자: pj_stun_config*
+        PJ_AF_INET,
+        PJ_TURN_TP_UDP,
+        &turn_callbacks,
+        &turn_sock_cfg,          // or nullptr
+        nullptr,                 // user_data
+        &turn_sock
+    );
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_create() error" << endl;
+        PJ_LOG(1,("TAG","pj_turn_sock_create error"));
         pj_timer_heap_destroy(timer_heap);
         pj_ioqueue_destroy(ioqueue);
         pj_pool_release(pool);
@@ -432,15 +461,19 @@ void turn_ack_receiver_thread() {
         return;
     }
 
-    // TURN Allocation
-    status = pj_turn_sock_alloc(turn_sock,
-                                &turn_server,
-                                TURN_SERVER_PORT,
-                                NULL, // DNS resolver
-                                &auth_cred,
-                                nullptr); // callback user data
+    // 8) TURN allocate
+    //    (이 버전에서는 pj_turn_sock_alloc() 시 pj_stun_auth_cred 대신
+    //     pj_turn_auth_cred(?)을 쓸 수도 있음. 아래 코드는 최근 형식 예시)
+    status = pj_turn_sock_alloc(
+        turn_sock,
+        &turn_server,           // TURN 서버 IP
+        TURN_SERVER_PORT,       // TURN 서버 포트
+        nullptr,                // resolver
+        &auth_cred,            // 인증
+        nullptr                 // callback user_data
+    );
     if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_alloc() error" << endl;
+        PJ_LOG(1,("TAG","pj_turn_sock_alloc error"));
         pj_turn_sock_destroy(turn_sock);
         pj_timer_heap_destroy(timer_heap);
         pj_ioqueue_destroy(ioqueue);
@@ -449,59 +482,59 @@ void turn_ack_receiver_thread() {
         return;
     }
 
-    // Relay 주소 확인
-    pj_sockaddr relay_addr;
-    unsigned int relay_addr_len = sizeof(relay_addr);
-    status = pj_turn_sock_get_relay_addr(turn_sock, &relay_addr, &relay_addr_len);
-    if (status != PJ_SUCCESS) {
-        cerr << "pj_turn_sock_get_relay_addr() error" << endl;
-        pj_turn_sock_destroy(turn_sock);
-        pj_timer_heap_destroy(timer_heap);
-        pj_ioqueue_destroy(ioqueue);
-        pj_pool_release(pool);
-        pj_shutdown();
-        return;
-    }
+    // 9) relay 주소 확인: pj_turn_sock_get_info()
+    pj_turn_sock_info info;
+    status = pj_turn_sock_get_info(turn_sock, &info);
+    if (status == PJ_SUCCESS) {
+        pj_sockaddr_in *relay_in = &info.relay_addr.ipv4;
+        char ip_str[PJ_INET_ADDRSTRLEN];
+        pj_inet_ntop(PJ_AF_INET, &relay_in->sin_addr, ip_str, sizeof(ip_str));
+        unsigned short relay_port = pj_ntohs(relay_in->sin_port);
 
-    char relay_ip[32];
-    pj_inet_ntop(PJ_AF_INET,
-                 &((pj_sockaddr_in*)&relay_addr)->sin_addr,
-                 relay_ip, sizeof(relay_ip));
-    uint16_t relay_port = ntohs(((pj_sockaddr_in*)&relay_addr)->sin_port);
-    cout << "TURN allocated relay address: " << relay_ip << ":" << relay_port << endl;
+        PJ_LOG(3,("TAG","TURN allocated relay address: %s:%d", ip_str, relay_port));
 
-    // 서버에 relay 주소 등록
-    string reg_msg = "TURN_REG:" + string(relay_ip) + ":" + to_string(relay_port);
-    pj_str_t reg_str = pj_str(const_cast<char*>(reg_msg.c_str()));
-    pj_sockaddr server_reg_addr;
-    status = pj_sockaddr_parse(PJ_AF_INET, SERVER_REG_PORT,
-                               pj_str(const_cast<char*>(SERVER_IP)),
-                               &server_reg_addr);
-    if (status != PJ_SUCCESS) {
-        cerr << "pj_sockaddr_parse() for registration failed" << endl;
-    } else {
-        status = pj_turn_sock_sendto(turn_sock,
-                                     reinterpret_cast<const pj_uint8_t*>(reg_str.ptr),
-                                     reg_str.slen,
-                                     &server_reg_addr, sizeof(server_reg_addr));
-        if (status != PJ_SUCCESS) {
-            cerr << "Failed to send TURN registration message" << endl;
-        } else {
-            cout << "TURN registration message sent to server." << endl;
+        // 서버에 등록 메시지 전송
+        std::ostringstream oss;
+        oss << "TURN_REG:" << ip_str << ":" << relay_port;
+        std::string reg_msg = oss.str();
+        pj_str_t reg_str = pj_str(const_cast<char*>(reg_msg.c_str()));
+
+        // 서버 sockaddr 파싱
+        pj_sockaddr server_reg_addr;
+        pj_str_t s_ip = pj_str(const_cast<char*>(SERVER_IP)); // 포인터 넘기려면 이 형태
+        status = pj_sockaddr_parse(
+            PJ_AF_INET,
+            SERVER_REG_PORT,
+            &s_ip,        // &s_ip
+            &server_reg_addr
+        );
+        if (status == PJ_SUCCESS) {
+            status = pj_turn_sock_sendto(
+                turn_sock,
+                reinterpret_cast<const pj_uint8_t*>(reg_str.ptr),
+                reg_str.slen,
+                &server_reg_addr,
+                sizeof(server_reg_addr)
+            );
+            if (status != PJ_SUCCESS) {
+                PJ_LOG(1,("TAG","Failed to send TURN registration message"));
+            } else {
+                PJ_LOG(3,("TAG","TURN registration message sent to server."));
+            }
         }
     }
 
-    // 메시지 수신 폴링
-    cout << "TURN ACK receiver started. Entering polling loop." << endl;
-    while (turn_running.load()) {
+    // 10) 이벤트 루프
+    while (/* turn_running.load() 등 */ true) {
         pj_time_val timeout;
         timeout.sec = 0;
         timeout.msec = 10;
         pj_ioqueue_poll(ioqueue, &timeout);
         pj_thread_sleep(10);
+        // 종료 조건 처리
     }
 
-    // 종료 처리
+    // 정리
     pj_turn_sock_destroy(turn_sock);
     pj_timer_heap_destroy(timer_heap);
     pj_ioqueue_destroy(ioqueue);
@@ -509,7 +542,6 @@ void turn_ack_receiver_thread() {
     pj_caching_pool_destroy(&cp);
     pj_shutdown();
 }
-
 //
 // 클라이언트 메인 스트림 스레드
 //
