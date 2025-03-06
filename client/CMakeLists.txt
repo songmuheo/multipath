@@ -34,12 +34,23 @@ set(PJSIP_LIBS
     pjsua
 )
 
+# GLib 라이브러리 설정
+pkg_check_modules(GLIB REQUIRED glib-2.0 gobject-2.0)
+include_directories(${GLIB_INCLUDE_DIRS})
+link_directories(${GLIB_LIBRARY_DIRS})
+
+# libnice 라이브러리 설정
+pkg_check_modules(NICE REQUIRED nice)
+include_directories(${NICE_INCLUDE_DIRS})
+link_directories(${NICE_LIBRARY_DIRS})
+
 # 실행 파일 추가
 add_executable(client client.cpp)
 target_link_libraries(client
     ${realsense2_LIBRARY}
     ${OpenCV_LIBS}
     ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE}
+
     pthread
 )
 
@@ -49,6 +60,8 @@ target_link_libraries(client_feedback
     ${OpenCV_LIBS}
     ${AVFORMAT} ${AVCODEC} ${AVUTIL} ${SWSCALE}
     ${PJSIP_LIBS}
+    ${GLIB_LIBRARIES}
+    ${NICE_LIBRARIES}
     OpenSSL::SSL OpenSSL::Crypto
     pthread
 )

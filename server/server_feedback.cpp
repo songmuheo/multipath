@@ -1,4 +1,4 @@
-// server.cpp
+// server_feedback.cpp
 #include <iostream>
 #include <fstream>
 #include <cstring>
@@ -14,16 +14,79 @@
 #include <filesystem>
 #include "config.h"
 
-// libnice / GLib (TURN ack 송신용)
+// OpenSSL 헤더 추가
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
+// libnice / GLib (TURN ACK 송신용)
 #include <nice/agent.h>
 #include <glib.h>
 
 using namespace std;
 namespace fs = std::filesystem;
 
-//─────────────────────────────────────────────────────────────────────────────
-// 로깅 클래스, PacketHeader, 타임스탬프 폴더 생성, H.264 frame type 추출, 로그 기록, UDP ACK 전송 함수
-// (아래 함수들은 기존 코드와 동일)
+// 만약 NICE_RELAY_TURN가 정의되어 있지 않으면 NICE_RELAY_TYPE_TURN_TLS로 정의
+#ifndef NICE_RELAY_TURN
+#define NICE_RELAY_TURN NICE_RELAY_TYPE_TURN_TLS
+#endif
+
+// 전역 변수 (TURN 관련)
+static NiceAgent *g_server_agent = nullptr;
+static guint g_server_stream_id = 0;
+static GMainLoop *g_server_loop = nullptr;
+static atomic<bool> server_turn_ready(false);
+
+// TURN credential 관련 함수 (예시)
+std::string base64_encode(const std::string& input) {
+    std::ostringstream out;
+    int val = 0, valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out << "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(val >> valb) & 0x3F];
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        out << "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[((val << 8) >> (valb + 8)) & 0x3F];
+    while (out.tellp() % 4)
+        out << '=';
+    return out.str();
+}
+
+std::string compute_turn_password(const std::string& user_with_timestamp, const std::string& realm, const std::string& secret) {
+    std::string key = user_with_timestamp + ":" + realm;
+    unsigned char hmac_result[EVP_MAX_MD_SIZE];
+    unsigned int hmac_length = 0;
+    memset(hmac_result, 0, sizeof(hmac_result));
+    HMAC(EVP_sha1(), secret.c_str(), secret.size(),
+         reinterpret_cast<const unsigned char*>(key.c_str()), key.size(),
+         hmac_result, &hmac_length);
+    return base64_encode(std::string(reinterpret_cast<const char*>(hmac_result), hmac_length));
+}
+
+std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
+    uint64_t expiration = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count() + validSeconds;
+    return std::to_string(expiration) + ":" + identifier;
+}
+
+// server_setup_turn_info() 함수: libnice의 nice_agent_set_relay_info() 사용
+void server_setup_turn_info() {
+    string server_username = "server_user";
+    // TURN password 생성 (예시)
+    string server_password = compute_turn_password(server_username, TURN_REALM, TURN_SECRET);
+    // 인자: agent, stream_id, component_id, relay_addr, relay_port, username, password, relay type
+    if (!nice_agent_set_relay_info(g_server_agent, g_server_stream_id, 1,
+                                   TURN_SERVER_IP, TURN_SERVER_PORT,
+                                   server_username.c_str(), server_password.c_str(),
+                                   NICE_RELAY_TURN)) {
+        cerr << "Server: Failed to set relay info\n";
+    }
+}
+
+// --- 로깅 및 패킷 관련 ---
 class BufferedLogger {
 public:
     BufferedLogger(const string& filepath) {
@@ -55,8 +118,8 @@ struct PacketHeader {
 };
 
 string create_timestamped_directory(const string& base_dir) {
-    auto now = chrono::system_clock::now();
-    time_t now_time = chrono::system_clock::to_time_t(now);
+    auto now = std::chrono::system_clock::now();
+    time_t now_time = std::chrono::system_clock::to_time_t(now);
     tm* local_time = localtime(&now_time);
     char folder_name[100];
     strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", local_time);
@@ -70,13 +133,17 @@ string get_h264_frame_type(const uint8_t* data, size_t size) {
         return "UNKNOWN";
     for (size_t i = 0; i < size - 3; i++) {
         if (data[i] == 0x00 && data[i+1] == 0x00 && data[i+2] == 0x01) {
-            if ((data[i+3] & 0x1F) == 5) return "I";
-            else if ((data[i+3] & 0x1F) == 1) return "P";
+            if ((data[i+3] & 0x1F) == 5)
+                return "I";
+            else if ((data[i+3] & 0x1F) == 1)
+                return "P";
         }
         if (i < size - 4 && data[i] == 0x00 && data[i+1] == 0x00 &&
             data[i+2] == 0x00 && data[i+3] == 0x01) {
-            if ((data[i+4] & 0x1F) == 5) return "I";
-            else if ((data[i+4] & 0x1F) == 1) return "P";
+            if ((data[i+4] & 0x1F) == 5)
+                return "I";
+            else if ((data[i+4] & 0x1F) == 1)
+                return "P";
         }
     }
     return "OTHER";
@@ -118,15 +185,7 @@ void send_ack(int sockfd, const sockaddr_in &dest_addr,
     }
 }
 
-//─────────────────────────────────────────────────────────────────────────────
-// libnice TURN ACK 송신 (서버용)
-//─────────────────────────────────────────────────────────────────────────────
-
-// 서버측 libnice 에이전트 전역 변수
-static NiceAgent *g_server_agent = nullptr;
-static GMainLoop *g_server_loop = nullptr;
-static guint g_server_stream_id = 0;
-static atomic<bool> server_turn_ready(false);
+// --- libnice TURN ACK 송신 (서버용) ---
 
 // 클라이언트 TURN 등록 정보 저장
 struct RemoteCandidate {
@@ -143,9 +202,8 @@ static void server_cb_candidate_gathering_done(NiceAgent *agent, guint stream_id
 
 static void server_cb_component_state_changed(NiceAgent *agent, guint stream_id, guint component_id, guint state, gpointer user_data) {
     g_print("Server: Component %u state changed to %u\n", component_id, state);
-    if (state == NICE_COMPONENT_STATE_READY) {
+    if (state == NICE_COMPONENT_STATE_READY)
         server_turn_ready = true;
-    }
 }
 
 static gboolean server_cb_data_received(NiceAgent *agent, guint stream_id, guint component_id,
@@ -163,21 +221,11 @@ static void server_turn_sender_thread() {
         return;
     }
     g_server_stream_id = nice_agent_add_stream(g_server_agent, 1);
-    // TURN 서버 설정
-    nice_agent_set_turn_server(g_server_agent, g_server_stream_id, TURN_SERVER_IP);
-    nice_agent_set_turn_port(g_server_agent, g_server_stream_id, TURN_SERVER_PORT);
-    // 서버용 고정 username/password (예: "server_user")
-    string server_username = "server_user";
-    // TURN password는 compute_turn_password()를 이용 (config.h의 TURN_SECRET 등)
-    // (서버용 credential은 TURN 서버 설정에 맞게 조정)
-    string server_password = compute_turn_password(server_username, TURN_REALM, TURN_SECRET);
-    nice_agent_set_turn_username(g_server_agent, g_server_stream_id, server_username.c_str());
-    nice_agent_set_turn_password(g_server_agent, g_server_stream_id, server_password.c_str());
-    
+    // TURN 설정: component_id는 1, 그리고 NICE_RELAY_TURN 사용
+    server_setup_turn_info();
     g_signal_connect(G_OBJECT(g_server_agent), "candidate-gathering-done", G_CALLBACK(server_cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_server_agent), "component-state-changed", G_CALLBACK(server_cb_component_state_changed), NULL);
     g_signal_connect(G_OBJECT(g_server_agent), "data-received", G_CALLBACK(server_cb_data_received), NULL);
-    
     if (!nice_agent_gather_candidates(g_server_agent, g_server_stream_id)) {
         cerr << "Server: Failed to start candidate gathering\n";
         return;
@@ -188,17 +236,17 @@ static void server_turn_sender_thread() {
     g_main_loop_unref(g_server_loop);
 }
 
-// 클라이언트의 TURN 등록 메시지("TURN_REG:ip:port")를 처리하여 원격 후보로 설정
+// 클라이언트의 TURN 등록 메시지 ("TURN_REG:ip:port")를 처리하여 원격 후보로 설정
 static void set_remote_candidate(const string &ip, int port) {
     lock_guard<mutex> lock(candidate_mutex);
     client_remote_candidate.ip = ip;
     client_remote_candidate.port = port;
     client_turn_registered = true;
     
-    // 원격 후보 생성 (RELAY 타입)
-    NiceCandidate *rcand = nice_candidate_new(NICE_CANDIDATE_TYPE_RELAY);
+    // 원격 후보 생성
+    NiceCandidate *rcand = nice_candidate_new(NICE_CANDIDATE_TYPE_RELAYED);
     rcand->component_id = 1;
-    rcand->protocol = NICE_CANDIDATE_TRANSPORT_UDP;
+    // protocol 멤버는 더 이상 사용되지 않으므로 제거
     nice_address_set_from_string(&rcand->addr, ip.c_str());
     nice_address_set_port(&rcand->addr, port);
     GSList *rcand_list = NULL;
@@ -210,7 +258,7 @@ static void set_remote_candidate(const string &ip, int port) {
     g_slist_free_full(rcand_list, (GDestroyNotify)&nice_candidate_free);
 }
 
-// TURN을 통해 ACK를 전송 (서버)
+// TURN을 통해 ACK 전송 (서버)
 void turn_send_ack_libnice(uint32_t sequence_number, uint64_t latency_us) {
     if (!server_turn_ready || !client_turn_registered.load()) {
         g_print("Server: TURN not ready or client not registered; cannot send ACK via TURN\n");
@@ -224,9 +272,6 @@ void turn_send_ack_libnice(uint32_t sequence_number, uint64_t latency_us) {
          g_print("Server: Sent ACK via TURN for seq=%u\n", sequence_number);
 }
 
-//─────────────────────────────────────────────────────────────────────────────
-// UDP 패킷 수신 및 처리 (영상 프레임 수신, TURN_REG 메시지 처리, ACK 전송)
-//─────────────────────────────────────────────────────────────────────────────
 void receive_packets(int port, BufferedLogger& logger) {
     int sockfd;
     char buffer[BUFFER_SIZE];
@@ -259,7 +304,7 @@ void receive_packets(int port, BufferedLogger& logger) {
                                     ).count();
         char sender_ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &sender_addr.sin_addr, sender_ip, INET_ADDRSTRLEN);
-        // TURN_REG 메시지 처리: "TURN_REG:ip:port"
+        // TURN_REG 메시지 처리
         if (len >= 9 && strncmp(buffer, "TURN_REG:", 9) == 0) {
             string reg_msg(buffer, len);
             size_t pos1 = reg_msg.find(":");
@@ -293,7 +338,6 @@ void receive_packets(int port, BufferedLogger& logger) {
                             network_latency_us,
                             len,
                             frame_type);
-            // ACK 전송: 클라이언트가 TURN 등록한 경우 TURN을 통해, 아니면 UDP로 전송
             if (client_turn_registered.load())
                 turn_send_ack_libnice(header->sequence_number, network_latency_us);
             else

@@ -33,7 +33,7 @@ extern "C" {
 #include <libavutil/opt.h>
 }
 
-// libnice / GLib (TURN ack 수신용)
+// libnice / GLib (TURN ACK 수신용)
 #include <nice/agent.h>
 #include <glib.h>
 
@@ -41,8 +41,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 //─────────────────────────────────────────────────────────────────────────────
-// Base64 인코더 및 HMAC-SHA1 계산, TURN username/password 생성 함수들
-//─────────────────────────────────────────────────────────────────────────────
+// Base64 인코더 및 HMAC-SHA1, TURN username/password 생성 함수들
 static const char* base64_chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     "abcdefghijklmnopqrstuvwxyz"
@@ -95,7 +94,6 @@ std::string generate_turn_username(const std::string& identifier, uint32_t valid
 
 //─────────────────────────────────────────────────────────────────────────────
 // 로깅 클래스
-//─────────────────────────────────────────────────────────────────────────────
 class BufferedLogger {
 public:
     BufferedLogger(const string& filepath) {
@@ -121,7 +119,7 @@ private:
 };
 
 //─────────────────────────────────────────────────────────────────────────────
-// 패킷 헤더 (영상 전송 시 함께 보내는 정보)
+// 패킷 헤더
 struct PacketHeader {
     uint64_t timestamp_frame;
     uint64_t timestamp_sending;
@@ -129,20 +127,17 @@ struct PacketHeader {
 };
 
 //─────────────────────────────────────────────────────────────────────────────
-// FFmpeg 인코딩 및 UDP 전송 (영상 전송)
-//─────────────────────────────────────────────────────────────────────────────
+// VideoStreamer: FFmpeg 인코딩 + UDP 전송 (영상 전송은 그대로)
 class VideoStreamer {
 public:
     VideoStreamer() : frame_counter(0), sequence_number(0) {
         create_and_set_output_folders();
-
         string logfile = logs_folder + "/packet_log.csv";
         logger = make_unique<BufferedLogger>(logfile);
         logger->log("sequence_number,pts,size,timestamp_frame,timestamp_sending,encoding_latency,frame_type");
 
         codec = avcodec_find_encoder_by_name("libx264");
         if (!codec) throw runtime_error("Codec 'libx264' not found");
-
         codec_ctx.reset(avcodec_alloc_context3(codec));
         if (!codec_ctx) throw runtime_error("Could not allocate codec context");
         codec_ctx->width = WIDTH;
@@ -161,7 +156,6 @@ public:
                         "force-cfr=1:rc-lookahead=0:ref=1:sliced-threads=0:"
                         "aq-mode=1:trellis=0:psy-rd=1.0:1.0";
         av_dict_set(&opt, "x264-params", xparam.c_str(), 0);
-
         if (avcodec_open2(codec_ctx.get(), codec, &opt) < 0)
             throw runtime_error("Could not open codec");
         av_dict_free(&opt);
@@ -182,26 +176,21 @@ public:
                                  SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize sws context");
 
-        // UDP 소켓 생성 (두 인터페이스)
         sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
         sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
-
         servaddr1 = create_sockaddr(SERVER_IP, SERVER_PORT);
         servaddr2 = create_sockaddr(SERVER_IP, SERVER_PORT + 1);
     }
-
     ~VideoStreamer() {
         if (sockfd1 >= 0) close(sockfd1);
         if (sockfd2 >= 0) close(sockfd2);
         if (sws_ctx) sws_freeContext(sws_ctx);
     }
-
     void stream(rs2::video_frame &color_frame, uint64_t ts) {
         frame->pts = frame_counter++;
         uint8_t* yuyv = (uint8_t*)color_frame.get_data();
         const uint8_t* src_slices[1] = { yuyv };
         int src_stride[1] = { 2 * WIDTH };
-
         if (sws_scale(sws_ctx, src_slices, src_stride,
                       0, HEIGHT, frame->data, frame->linesize) < 0) {
             cerr << "Error in sws_scale\n";
@@ -209,7 +198,6 @@ public:
         }
         encode_and_send_frame(ts);
     }
-
 private:
     void create_and_set_output_folders() {
         auto now = chrono::system_clock::now();
@@ -224,7 +212,6 @@ private:
         fs::create_directories(frames_folder);
         fs::create_directories(logs_folder);
     }
-
     sockaddr_in create_sockaddr(const char* ip, int port) {
         sockaddr_in addr = {};
         addr.sin_family = AF_INET;
@@ -232,7 +219,6 @@ private:
         addr.sin_addr.s_addr = inet_addr(ip);
         return addr;
     }
-
     int create_socket_and_bind(const char* ip, const char* if_name) {
         int s = socket(AF_INET, SOCK_DGRAM, 0);
         if (s < 0) throw runtime_error("socket fail");
@@ -247,7 +233,6 @@ private:
         }
         return s;
     }
-
     void encode_and_send_frame(uint64_t ts) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
             cerr << "Error sending frame\n";
@@ -260,42 +245,34 @@ private:
             hdr.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
                 chrono::system_clock::now().time_since_epoch()).count();
             hdr.sequence_number = sequence_number++;
-
             double enc_lat = (hdr.timestamp_sending - hdr.timestamp_frame) / 1000.0;
             string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
-
             vector<uint8_t> data(sizeof(PacketHeader) + pkt->size);
             memcpy(data.data(), &hdr, sizeof(PacketHeader));
             memcpy(data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
-
             ostringstream logMsg;
             logMsg << hdr.sequence_number << "," << frame->pts << "," << pkt->size << ","
                    << hdr.timestamp_frame << "," << hdr.timestamp_sending << ","
                    << enc_lat << "," << frame_type;
             logger->log(logMsg.str());
-
-            // 영상 데이터는 기존과 같이 두 인터페이스 UDP 전송
+            // 영상 데이터는 UDP로 전송 (변경 없음)
             auto t1 = async(launch::async, [this, &data]() {
                 if (sendto(sockfd1, data.data(), data.size(), 0,
-                           (struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0) {
+                           (struct sockaddr*)&servaddr1, sizeof(servaddr1)) < 0)
                     cerr << "Send error(if1): " << strerror(errno) << "\n";
-                }
             });
             auto t2 = async(launch::async, [this, &data]() {
                 if (sendto(sockfd2, data.data(), data.size(), 0,
-                           (struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0) {
+                           (struct sockaddr*)&servaddr2, sizeof(servaddr2)) < 0)
                     cerr << "Send error(if2): " << strerror(errno) << "\n";
-                }
             });
             t1.get();
             t2.get();
-
             av_packet_unref(pkt.get());
         }
         if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
             cerr << "Error receiving encoded packet\n";
     }
-
     const AVCodec* codec;
     unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{
         nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }
@@ -307,7 +284,6 @@ private:
         nullptr, [](AVPacket* p) { av_packet_free(&p); }
     };
     SwsContext* sws_ctx = nullptr;
-
     int sockfd1 = -1, sockfd2 = -1;
     sockaddr_in servaddr1, servaddr2;
     unique_ptr<BufferedLogger> logger;
@@ -318,7 +294,6 @@ private:
 
 //─────────────────────────────────────────────────────────────────────────────
 // libnice TURN ACK 수신 (클라이언트용)
-//─────────────────────────────────────────────────────────────────────────────
 static NiceAgent *g_nice_agent = nullptr;
 static GMainLoop *g_main_loop = nullptr;
 static guint g_stream_id = 0;
@@ -332,7 +307,7 @@ static void cb_component_state_changed(NiceAgent *agent, guint stream_id, guint 
     g_print("Component %u state changed to %u\n", component_id, state);
     if (state == NICE_COMPONENT_STATE_READY) {
         nice_turn_ready = true;
-        // TURN 연결이 READY되면 로컬 candidate 정보를 추출하여 서버에 등록 메시지 전송
+        // 로컬 TURN candidate 정보를 추출하여 서버에 등록
         GSList *lcandidates = nice_agent_get_local_candidates(agent, stream_id, component_id);
         if (lcandidates) {
             NiceCandidate *candidate = (NiceCandidate*)lcandidates->data;
@@ -340,7 +315,7 @@ static void cb_component_state_changed(NiceAgent *agent, guint stream_id, guint 
             nice_address_to_string(&candidate->addr, ip);
             int port = nice_address_get_port(&candidate->addr);
             g_print("Local TURN candidate: %s:%d\n", ip, port);
-            // UDP로 서버 TURN 등록 메시지 전송
+            // UDP로 TURN_REG 메시지 전송
             int sock = socket(AF_INET, SOCK_DGRAM, 0);
             if (sock < 0) {
                 cerr << "Failed to create UDP socket for TURN_REG\n";
@@ -379,14 +354,18 @@ static void nice_turn_receiver_thread() {
         return;
     }
     g_stream_id = nice_agent_add_stream(g_nice_agent, 1);
-    // TURN 서버 설정 (config.h의 TURN_SERVER_IP, TURN_SERVER_PORT 등)
-    nice_agent_set_turn_server(g_nice_agent, g_stream_id, TURN_SERVER_IP);
-    nice_agent_set_turn_port(g_nice_agent, g_stream_id, TURN_SERVER_PORT);
+    // TURN 설정: libnice에서는 set_turn_info() 대신 set_turn_info()가 없으면 set_relay_info()를 사용
     string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     string ephemeral_password = compute_turn_password(ephemeral_username, TURN_REALM, TURN_SECRET);
-    nice_agent_set_turn_username(g_nice_agent, g_stream_id, ephemeral_username.c_str());
-    nice_agent_set_turn_password(g_nice_agent, g_stream_id, ephemeral_password.c_str());
-    // 콜백 연결
+    if (!nice_agent_set_turn_info(g_nice_agent, g_stream_id, TURN_SERVER_IP, TURN_SERVER_PORT,
+                                  ephemeral_username.c_str(), ephemeral_password.c_str())) {
+        // 만약 set_turn_info()가 없으면, set_relay_info()로 대체합니다.
+        if (!nice_agent_set_relay_info(g_nice_agent, g_stream_id, TURN_SERVER_IP, TURN_SERVER_PORT,
+                                       ephemeral_username.c_str(), ephemeral_password.c_str())) {
+            cerr << "Failed to set TURN/relay info\n";
+            return;
+        }
+    }
     g_signal_connect(G_OBJECT(g_nice_agent), "candidate-gathering-done", G_CALLBACK(cb_candidate_gathering_done), NULL);
     g_signal_connect(G_OBJECT(g_nice_agent), "component-state-changed", G_CALLBACK(cb_component_state_changed), NULL);
     g_signal_connect(G_OBJECT(g_nice_agent), "data-received", G_CALLBACK(cb_data_received), NULL);
