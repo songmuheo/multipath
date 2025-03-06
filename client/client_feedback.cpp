@@ -452,7 +452,7 @@ static void turn_ack_receiver_thread()
 
     uint64_t expiration = chrono::duration_cast<chrono::seconds>(
                           chrono::system_clock::now().time_since_epoch()
-                      ).count() + validSeconds;
+                      ).count() + TURN_VALID_SECONDS;
 
     string ephemeral_username= generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     // string ephemeral_password= compute_turn_password(
@@ -471,7 +471,7 @@ static void turn_ack_receiver_thread()
     std::cerr << "[DEBUG] ephemeral_username : " << ephemeral_username << std::endl;
     std::cerr << "[DEBUG] ephemeral_password_bin.size()=" << ephemeral_password_bin.size() << "\n";
 
-    std::cerr << "[DEBUG] expiration         : " << expiration << " (+" << validSeconds << " from now)\n";
+    std::cerr << "[DEBUG] expiration         : " << expiration << " (+" << TURN_VALID_SECONDS << " from now)\n";
     std::cerr << "[DEBUG] ephemeral_password_bin(hex)=";
     for (unsigned char c : ephemeral_password_bin) {
         std::cerr << std::hex << std::setw(2) << std::setfill('0')
