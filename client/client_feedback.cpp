@@ -150,21 +150,30 @@ static void on_state_cb(pj_turn_sock *turn_sock,
                         pj_turn_state_t old_state,
                         pj_turn_state_t new_state)
 {
-    PJ_LOG(3,("TURN", "TURN state changed: %d --> %d", old_state, new_state));
+    PJ_LOG(3,("TURN", "TURN state changed: %d -> %d", old_state, new_state));
 
     if (new_state == PJ_TURN_STATE_READY) {
-        // Relay 주소 얻기
         pj_turn_session_info info;
         if (pj_turn_sock_get_info(turn_sock, &info) == PJ_SUCCESS) {
-            char relay_ip[48];
-            int family = pj_sockaddr_get_af(&info.relay_addr);
+            char relay_ip[64];
 
-            pj_inet_ntop(family, 
-                         &info.relay_addr.ipv4.sin_addr,
-                         relay_ip, sizeof(relay_ip));
-            pj_uint16_t relay_port = pj_ntohs(info.relay_addr.ipv4.sin_port);
+            // IPv4/IPv6 여부 분기
+            if (info.relay_addr.ipv4.sin_family == PJ_AF_INET) {
+                pj_inet_ntop(PJ_AF_INET,
+                             &info.relay_addr.ipv4.sin_addr,
+                             relay_ip, sizeof(relay_ip));
+                pj_uint16_t relay_port = pj_ntohs(info.relay_addr.ipv4.sin_port);
 
-            PJ_LOG(3,("TURN", "Relay allocated: %s:%d", relay_ip, relay_port));
+                PJ_LOG(3,("TURN", "Relay allocated(IPv4): %s:%d", relay_ip, relay_port));
+            } else {
+                // IPv6...
+                char bufv6[64];
+                pj_inet_ntop(PJ_AF_INET6,
+                             &info.relay_addr.ipv6.sin6_addr,
+                             bufv6, sizeof(bufv6));
+                pj_uint16_t relay_port = pj_ntohs(info.relay_addr.ipv6.sin6_port);
+                PJ_LOG(3,("TURN", "Relay allocated(IPv6): %s:%d", bufv6, relay_port));
+            }
         }
     }
 }
