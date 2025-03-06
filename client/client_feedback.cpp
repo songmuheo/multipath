@@ -307,6 +307,16 @@ static atomic<bool> nice_turn_ready(false);
 
 static void cb_candidate_gathering_done(NiceAgent *agent, guint stream_id, gpointer user_data) {
     g_print("Candidate gathering done for stream %u\n", stream_id);
+        // 모든 로컬 후보 목록 출력
+    GSList *candidates = nice_agent_get_local_candidates(agent, stream_id, 1);
+    for (GSList *iter = candidates; iter; iter = iter->next) {
+        NiceCandidate *cand = (NiceCandidate*)iter->data;
+        char ip[NI_MAXHOST];
+        nice_address_to_string(&cand->addr, ip);
+        int port = nice_address_get_port(&cand->addr);
+        g_print("Local candidate: %s:%d, type=%d\n", ip, port, cand->type);
+    }
+    g_slist_free_full(candidates, (GDestroyNotify)&nice_candidate_free);
 }
 
 static void cb_component_state_changed(NiceAgent *agent, guint stream_id, guint component_id, guint state, gpointer user_data) {

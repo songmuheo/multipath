@@ -307,6 +307,8 @@ void receive_packets(int port, BufferedLogger& logger) {
         // TURN_REG 메시지 처리
         if (len >= 9 && strncmp(buffer, "TURN_REG:", 9) == 0) {
             string reg_msg(buffer, len);
+            g_print("Server received TURN_REG message: %s\n", reg_msg.c_str());
+
             size_t pos1 = reg_msg.find(":");
             size_t pos2 = reg_msg.find(":", pos1 + 1);
             if (pos1 != string::npos && pos2 != string::npos) {
