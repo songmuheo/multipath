@@ -44,7 +44,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 //
-// BufferedLogger: 로그를 내부 버퍼에 기록하는 클래스
+// BufferedLogger
 //
 class BufferedLogger {
 public:
@@ -81,7 +81,7 @@ struct PacketHeader {
 };
 
 //
-// TURN 관련 헬퍼 함수들
+// TURN 관련 헬퍼 함수
 //
 std::string generate_turn_username(const std::string& identifier, uint32_t validSeconds) {
     uint64_t expiration = chrono::duration_cast<chrono::seconds>(
@@ -103,9 +103,9 @@ std::string compute_turn_password(const std::string& data, const std::string& se
     return oss.str();
 }
 
-//-----------------------------------------------------------------
+//
 // TURN 콜백 정의
-//-----------------------------------------------------------------
+//
 static pj_bool_t on_data_sent_cb(pj_turn_sock *sock, pj_ssize_t sent)
 {
     if (sent < 0) {
@@ -114,7 +114,6 @@ static pj_bool_t on_data_sent_cb(pj_turn_sock *sock, pj_ssize_t sent)
     } else {
         PJ_LOG(4,("TURN", "Data sent: %zd bytes", (ssize_t)sent));
     }
-    // 여기서 소켓을 파괴했으면 PJ_FALSE 리턴
     return PJ_TRUE; 
 }
 
@@ -124,9 +123,8 @@ static void on_rx_data_cb(pj_turn_sock *turn_sock,
                           const pj_sockaddr_t *peer_addr,
                           unsigned addr_len)
 {
-    // TURN 서버 통해 들어온 Peer 데이터 (예: RTP/프레임)
     PJ_LOG(4,("TURN", "TURN on_rx_data: got %u bytes from peer", pkt_len));
-    // 여기서 처리...
+    // 필요 시 여기서 처리
 }
 
 static pj_status_t on_connection_attempt_cb(pj_turn_sock *turn_sock,
@@ -134,9 +132,7 @@ static pj_status_t on_connection_attempt_cb(pj_turn_sock *turn_sock,
                                             const pj_sockaddr_t *peer_addr,
                                             unsigned addr_len)
 {
-    // RFC 6062 TCP TURN Allocation 사용 시, Peer가 서버에 Connect한 상황
-    // 간단히 자동 허용(=PJ_SUCCESS) 혹은 거절(다른 값)
-    PJ_LOG(3,("TURN", "TCP connection attempt from peer!"));
+    PJ_LOG(3,("TURN", "TCP connection attempt from peer! (RFC6062)"));
     return PJ_SUCCESS;
 }
 
@@ -155,37 +151,34 @@ static void on_state_cb(pj_turn_sock *turn_sock,
                         pj_turn_state_t new_state)
 {
     PJ_LOG(3,("TURN", "TURN state changed: %d --> %d", old_state, new_state));
+
     if (new_state == PJ_TURN_STATE_READY) {
-        // 할당 성공 → relay 주소 얻기
+        // Relay 주소 얻기
         pj_turn_session_info info;
         if (pj_turn_sock_get_info(turn_sock, &info) == PJ_SUCCESS) {
             char relay_ip[48];
-            pj_inet_ntop(info.relay_addr.sa_family,
-                         &((pj_sockaddr_in*)&info.relay_addr)->sin_addr,
+            int family = pj_sockaddr_get_af(&info.relay_addr);
+
+            pj_inet_ntop(family, 
+                         &info.relay_addr.ipv4.sin_addr,
                          relay_ip, sizeof(relay_ip));
-            pj_uint16_t relay_port = pj_ntohs(
-                ((pj_sockaddr_in*)&info.relay_addr)->sin_port
-            );
+            pj_uint16_t relay_port = pj_ntohs(info.relay_addr.ipv4.sin_port);
 
             PJ_LOG(3,("TURN", "Relay allocated: %s:%d", relay_ip, relay_port));
         }
     }
 }
 
-//-----------------------------------------------------------------
-// TURN cb struct
-//-----------------------------------------------------------------
 static pj_turn_sock_cb turn_callbacks = {
     &on_rx_data_cb,
     &on_data_sent_cb,
     &on_state_cb,
-    &on_connection_attempt_cb,   // RFC 6062 (TCP)
-    &on_connection_status_cb     // RFC 6062 (TCP)
+    &on_connection_attempt_cb,
+    &on_connection_status_cb
 };
 
-
 //
-// VideoStreamer: RealSense 프레임 → H.264 인코딩 → UDP 전송
+// VideoStreamer
 //
 class VideoStreamer {
 public:
@@ -210,9 +203,8 @@ public:
         codec_ctx->framerate = {FPS, 1};
         codec_ctx->pix_fmt = AV_PIX_FMT_YUV420P;
         codec_ctx->max_b_frames = 0;
-        codec_ctx->gop_size = 10; // I-프레임 주기
+        codec_ctx->gop_size = 10;
 
-        // x264 옵션
         AVDictionary* opt = nullptr;
         av_dict_set(&opt, "preset", "veryfast", 0);
         av_dict_set(&opt, "tune", "zerolatency", 0);
@@ -239,15 +231,12 @@ public:
         pkt.reset(av_packet_alloc());
         if (!pkt) throw runtime_error("Could not allocate AVPacket");
 
-        // 색상 변환 컨텍스트 (YUYV422 → YUV420P)
-        sws_ctx = sws_getContext(
-            WIDTH, HEIGHT, AV_PIX_FMT_YUYV422,
-            WIDTH, HEIGHT, AV_PIX_FMT_YUV420P,
-            SWS_BILINEAR, nullptr, nullptr, nullptr
-        );
+        sws_ctx = sws_getContext(WIDTH, HEIGHT, AV_PIX_FMT_YUYV422,
+                                 WIDTH, HEIGHT, AV_PIX_FMT_YUV420P,
+                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
         if (!sws_ctx) throw runtime_error("Could not initialize the conversion context");
 
-        // UDP 소켓 2개 생성 (두 인터페이스용)
+        // UDP 소켓 2개 생성 (두 인터페이스)
         sockfd1 = create_socket_and_bind(INTERFACE1_IP, INTERFACE1_NAME);
         sockfd2 = create_socket_and_bind(INTERFACE2_IP, INTERFACE2_NAME);
 
@@ -261,32 +250,27 @@ public:
         if (sws_ctx) sws_freeContext(sws_ctx);
     }
 
-    // 실시간으로 들어오는 color_frame을 인코딩 + UDP 전송
     void stream(rs2::video_frame& color_frame, uint64_t timestamp_frame) {
         frame->pts = frame_counter++;
 
         uint8_t* yuyv_data = (uint8_t*)color_frame.get_data();
         const uint8_t* src_slices[1] = { yuyv_data };
-        int src_stride[1] = { 2 * WIDTH }; // YUYV는 가로당 2바이트
+        int src_stride[1] = { 2 * WIDTH };
 
-        // YUYV422 → YUV420P 변환
-        if (sws_scale(
-                sws_ctx, src_slices, src_stride,
-                0, HEIGHT, frame->data, frame->linesize
-            ) < 0) {
+        if (sws_scale(sws_ctx, src_slices, src_stride,
+                      0, HEIGHT, frame->data, frame->linesize) < 0) {
             cerr << "Error in sws_scale" << endl;
             return;
         }
 
-        // (선택) 프레임 이미지를 PNG로 저장하고 싶다면
+        // (선택) PNG 저장
         save_frame_image(color_frame, timestamp_frame);
 
-        // FFmpeg로 H.264 인코딩 후 sendto()
+        // H.264 인코딩 + sendto()
         encode_and_send_frame(timestamp_frame);
     }
 
 private:
-    // 폴더 구조 생성
     void create_and_set_output_folders() {
         auto now = chrono::system_clock::now();
         time_t time_now = chrono::system_clock::to_time_t(now);
@@ -295,7 +279,7 @@ private:
         char folder_name[100];
         strftime(folder_name, sizeof(folder_name), "%Y_%m_%d_%H_%M", &local_time);
 
-        string base_folder = SAVE_FILEPATH + string(folder_name); // config.h에서 SAVE_FILEPATH 정의
+        string base_folder = SAVE_FILEPATH + string(folder_name);
         fs::create_directories(base_folder);
 
         frames_folder = base_folder + "/frames";
@@ -304,7 +288,6 @@ private:
         fs::create_directories(logs_folder);
     }
 
-    // 소켓 바인딩용
     sockaddr_in create_sockaddr(const char* ip, int port) {
         sockaddr_in addr = {};
         addr.sin_family = AF_INET;
@@ -317,12 +300,12 @@ private:
         int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
         if (sockfd < 0) throw runtime_error("Socket creation failed");
 
-        // 특정 네트워크 인터페이스에 바인딩
-        if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, interface_name, strlen(interface_name)) < 0) {
+        if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE,
+                       interface_name, strlen(interface_name)) < 0) {
             close(sockfd);
             throw runtime_error("SO_BINDTODEVICE failed for " + string(interface_name));
         }
-        sockaddr_in bindaddr = create_sockaddr(interface_ip, 0); // 포트는 OS가 랜덤 할당
+        sockaddr_in bindaddr = create_sockaddr(interface_ip, 0);
         if (bind(sockfd, (struct sockaddr*)&bindaddr, sizeof(bindaddr)) < 0) {
             close(sockfd);
             throw runtime_error("Bind failed on " + string(interface_ip));
@@ -330,9 +313,8 @@ private:
         return sockfd;
     }
 
-    // 디버깅용(선택) 프레임 이미지를 PNG로 저장
     void save_frame_image(const rs2::video_frame& frame_data, uint64_t timestamp_frame) {
-        // 필요 없는 경우 주석 처리 가능
+        // 디버깅 목적 PNG 저장
         string filename = frames_folder + "/" + to_string(timestamp_frame) + ".png";
         cv::Mat yuyv_image(HEIGHT, WIDTH, CV_8UC2, (void*)frame_data.get_data());
         cv::Mat bgr_image;
@@ -340,16 +322,14 @@ private:
         cv::imwrite(filename, bgr_image);
     }
 
-    // FFmpeg 인코딩 & UDP 전송
     void encode_and_send_frame(uint64_t timestamp_frame) {
         if (avcodec_send_frame(codec_ctx.get(), frame.get()) < 0) {
-            cerr << "Error sending a frame for encoding" << endl;
+            cerr << "Error sending frame for encoding" << endl;
             return;
         }
 
         int ret;
         while ((ret = avcodec_receive_packet(codec_ctx.get(), pkt.get())) == 0) {
-            // 패킷 헤더 + H.264 페이로드
             PacketHeader header;
             header.timestamp_frame   = timestamp_frame;
             header.timestamp_sending = chrono::duration_cast<chrono::microseconds>(
@@ -357,14 +337,14 @@ private:
             ).count();
             header.sequence_number   = sequence_number++;
 
-            double encoding_latency_ms = (header.timestamp_sending - header.timestamp_frame) / 1000.0;
+            double encoding_latency_ms = (header.timestamp_sending - header.timestamp_frame)/1000.0;
             string frame_type = (pkt->flags & AV_PKT_FLAG_KEY) ? "I-frame" : "P-frame";
 
             vector<uint8_t> packet_data(sizeof(PacketHeader) + pkt->size);
             memcpy(packet_data.data(), &header, sizeof(PacketHeader));
             memcpy(packet_data.data() + sizeof(PacketHeader), pkt->data, pkt->size);
 
-            // 로그 기록
+            // 로그
             ostringstream logMsg;
             logMsg << header.sequence_number << ","
                    << frame->pts << ","
@@ -399,51 +379,44 @@ private:
         }
     }
 
-    // FFmpeg
+private:
     const AVCodec* codec;
-    unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx{
-        nullptr, [](AVCodecContext* p) { avcodec_free_context(&p); }
+    unique_ptr<AVCodecContext, void(*)(AVCodecContext*)> codec_ctx {
+        nullptr, [](AVCodecContext* p){ avcodec_free_context(&p); }
     };
-    unique_ptr<AVFrame, void(*)(AVFrame*)> frame{
-        nullptr, [](AVFrame* p) { av_frame_free(&p); }
+    unique_ptr<AVFrame, void(*)(AVFrame*)> frame {
+        nullptr, [](AVFrame* p){ av_frame_free(&p); }
     };
-    unique_ptr<AVPacket, void(*)(AVPacket*)> pkt{
-        nullptr, [](AVPacket* p) { av_packet_free(&p); }
+    unique_ptr<AVPacket, void(*)(AVPacket*)> pkt {
+        nullptr, [](AVPacket* p){ av_packet_free(&p); }
     };
     SwsContext* sws_ctx = nullptr;
 
-    // UDP 소켓
-    int sockfd1 = -1;
-    int sockfd2 = -1;
+    int sockfd1 = -1, sockfd2 = -1;
     sockaddr_in servaddr1, servaddr2;
 
-    // 로깅
     unique_ptr<BufferedLogger> logger;
-    string frames_folder;
-    string logs_folder;
+    string frames_folder, logs_folder;
 
     atomic<int> frame_counter;
     atomic<int> sequence_number;
 };
 
 //
-// TURN ACK 수신 스레드
+// TURN 관련
 //
-
-//======================================================================
-// 2) 클라이언트 코드(일부) - TURN 소켓 생성
-//======================================================================
 pj_caching_pool cp;
 pj_pool_t *pool = nullptr;
 pj_turn_sock *turn_sock = nullptr;
 
 atomic<bool> turn_running{true};
-static void turn_ack_receiver_thread() 
+
+static void turn_ack_receiver_thread()
 {
     pj_status_t status;
 
-    // 1) 라이브러리 초기화
-    status = pj_init(); 
+    // 1) pjlib 초기화
+    status = pj_init();
     if (status != PJ_SUCCESS) {
         PJ_LOG(1,("TAG","pj_init() error"));
         return;
@@ -455,28 +428,27 @@ static void turn_ack_receiver_thread()
         return;
     }
 
-    // 2) caching pool, pool, stun_config 준비
+    // 2) caching pool
     pj_caching_pool_init(&cp, nullptr, 0);
     pool = pj_pool_create(&cp.factory, "turn_pool", 4000, 4000, nullptr);
 
     pj_stun_config stun_cfg;
-    pj_stun_config_init(&stun_cfg, &cp.factory, 0, /*ioqueue=*/nullptr, /*timer_heap=*/nullptr);
-    // 위에서 ioqueue, timer_heap 을 별도로 만들고 싶은 경우 pj_ioqueue_create, pj_timer_heap_create 등
+    pj_stun_config_init(&stun_cfg, &cp.factory, 0, nullptr, nullptr);
+    // 실제 사용 시 pj_ioqueue_create(), pj_timer_heap_create() 등을 통해
+    // stun_cfg.ioqueue, stun_cfg.timer_heap 할당 가능
 
-    // 3) TURN 소켓 설정
-    pj_turn_sock_cfg turn_sock_cfg_default;
-    pj_turn_sock_cfg_default(&turn_sock_cfg_default);
+    // TURN 소켓 세팅
+    pj_turn_sock_cfg tcfg;
+    pj_turn_sock_cfg_default(&tcfg);
 
-    // 4) TURN 소켓 생성
-    //    - AF_INET, UDP
-    //    - cb: turn_callbacks
+    // 소켓 생성
     status = pj_turn_sock_create(
         &stun_cfg,
         PJ_AF_INET,
         PJ_TURN_TP_UDP,
         &turn_callbacks,
-        &turn_sock_cfg_default,
-        /* user_data */ nullptr,
+        &tcfg,
+        nullptr,
         &turn_sock
     );
     if (status != PJ_SUCCESS) {
@@ -487,12 +459,12 @@ static void turn_ack_receiver_thread()
         return;
     }
 
-    // 5) TURN 서버 domain/IP, 인증 정보
-    pj_str_t turnServer = pj_str(const_cast<char*>(TURN_SERVER_IP)); // 예: "121.128.220.205"
+    // 인증정보
+    pj_str_t turnServer = pj_str(const_cast<char*>(TURN_SERVER_IP));
     pj_stun_auth_cred auth_cred;
     pj_bzero(&auth_cred, sizeof(auth_cred));
     auth_cred.type = PJ_STUN_AUTH_CRED_STATIC;
-    // 동적 username/password
+
     std::string ephemeral_username = generate_turn_username(TURN_IDENTIFIER, TURN_VALID_SECONDS);
     std::string ephemeral_password = compute_turn_password(
         ephemeral_username + ":" + TURN_REALM,
@@ -502,36 +474,32 @@ static void turn_ack_receiver_thread()
     auth_cred.data.static_cred.data     = pj_str(const_cast<char*>(ephemeral_password.c_str()));
     auth_cred.data.static_cred.data_type= PJ_STUN_PASSWD_PLAIN;
 
-    // 6) TURN 서버로 Allocate
-    //    (resolver == NULL → hostname 직접 or IP. PORT는 TURN_SERVER_PORT)
+    // TURN allocate
     status = pj_turn_sock_alloc(
         turn_sock,
         &turnServer,
-        TURN_SERVER_PORT,  // int
-        nullptr,           // DNS resolver
+        TURN_SERVER_PORT,
+        nullptr,  // DNS resolver
         &auth_cred,
-        nullptr            // alloc param
+        nullptr   // alloc param
     );
     if (status != PJ_SUCCESS) {
         PJ_LOG(1,("TAG","pj_turn_sock_alloc() error %d", status));
-        // cleanup
         pj_turn_sock_destroy(turn_sock);
         pj_pool_release(pool);
         pj_caching_pool_destroy(&cp);
         pj_shutdown();
         return;
     }
-    // 7) 이벤트 루프 대기(예: 10ms)
-    //    실제 사용에선 pj_ioqueue, pj_timer_heap에 대해
-    //    polling 하면서 sleep / or 별도 while 루프
+
     PJ_LOG(3,("TURN", "TURN ack receiver started. polling loop..."));
-    while (/* thread running */ true) {
-        pj_thread_sleep(10); 
-        // 여기서 ioqueue_poll() / timer_heap poll 등
-        // ...
+
+    while (turn_running.load()) {
+        pj_thread_sleep(10);
+        // 여기에 pj_ioqueue_poll(), pj_timer_heap_poll() 수행 가능
     }
 
-    // 8) 종료 처리
+    // 종료 시 처리
     if (turn_sock) {
         pj_turn_sock_destroy(turn_sock);
         turn_sock = nullptr;
@@ -544,9 +512,6 @@ static void turn_ack_receiver_thread()
     pj_shutdown();
 }
 
-//
-// 클라이언트 메인 스트림 스레드
-//
 void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& running) {
     while (running.load()) {
         rs2::frameset frames = pipe.wait_for_frames();
@@ -561,31 +526,23 @@ void client_stream(VideoStreamer& streamer, rs2::pipeline& pipe, atomic<bool>& r
     }
 }
 
-//
-// main
-//
 int main() {
     try {
-        // RealSense 파이프라인 시작
         rs2::pipeline pipe;
         rs2::config cfg;
         cfg.enable_stream(RS2_STREAM_COLOR, WIDTH, HEIGHT, RS2_FORMAT_YUYV, FPS);
         pipe.start(cfg);
 
-        // 스트리머 생성
         VideoStreamer streamer;
 
-        // 영상 송출 스레드
         atomic<bool> running(true);
         thread client_thread(client_stream, ref(streamer), ref(pipe), ref(running));
 
-        // TURN ACK 수신 스레드
         thread turn_thread(turn_ack_receiver_thread);
 
         cout << "Press Enter to stop streaming..." << endl;
         cin.get();
 
-        // 종료
         running.store(false);
         turn_running.store(false);
         client_thread.join();
