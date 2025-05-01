@@ -103,10 +103,15 @@ class StreamingEnvironment:
         # latency
         self.min_latency = np.min(self.latency_values)
         self.max_latency = np.percentile(self.latency_values, 99)  # 99th percentile
+        # print(f'Debug: {self.max_latency}\n')
         # variance
         variance_values = self.compute_latency_variances()
         self.min_variance = np.min(variance_values) if len(variance_values) > 0 else 0
-        self.max_variance = np.percentile(variance_values, 98) if len(variance_values) > 0 else 1
+        # Before
+        # self.max_variance = np.percentile(variance_values, 98) if len(variance_values) > 0 else 1
+        # After
+        self.max_variance = np.percentile(variance_values, 99) if len(variance_values) > 0 else 1
+
 
     def get_all_latency_values(self):
         """Retrieve all latency values from network logs."""
@@ -434,14 +439,20 @@ class StreamingEnvironment:
         """Update latency histories for KT and LG."""
         if path_choice in ['KT', 'Both']:
             if not np.isinf(latencies['KT']) and latencies['KT'] > 0:
-                self.kt_last_latency = latencies['KT']
+                # 추가
+                clipped_kt = np.clip(latencies['KT'], self.min_latency, self.max_latency)
+                self.kt_last_latency = clipped_kt
+                # self.kt_last_latency = latencies['KT']
                 self.kt_latency_history.append(self.kt_last_latency)
                 if len(self.kt_latency_history) > self.history_length:
                     self.kt_latency_history.pop(0)
 
         if path_choice in ['LG', 'Both']:
             if not np.isinf(latencies['LG']) and latencies['LG'] > 0:
-                self.lg_last_latency = latencies['LG']
+                # 추가
+                clipped_lg = np.clip(latencies['LG'], self.min_latency, self.max_latency)
+                self.lg_last_latency = clipped_lg
+                # self.lg_last_latency = latencies['LG']
                 self.lg_latency_history.append(self.lg_last_latency)
                 if len(self.lg_latency_history) > self.history_length:
                     self.lg_latency_history.pop(0)
@@ -494,8 +505,10 @@ class StreamingEnvironment:
         if ssim_value > self.ssim_threshold:
             reward = math.log(ssim_value + (1 - self.ssim_threshold)) + \
                      self.gamma_reward * math.log(self.max_datasize / datasize)
+            # print(f'Reward1: {reward}\nssim: {math.log(ssim_value + (1 - self.ssim_threshold))}\ndatasize: {self.gamma_reward * math.log(self.max_datasize / datasize)}')
         else:
             reward = math.log(ssim_value + (1 - self.ssim_threshold))
+            # print(f'Reward2: {reward}\n')
         return reward
 
     def get_network_latencies(self, seq_num, path_choice):

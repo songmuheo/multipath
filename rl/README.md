@@ -26,3 +26,7 @@ LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=/home/songmu/multipa
 
 
 LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libffi.so.7 PYTHONPATH=$(pwd)/codec_module/build python3 test_encoder_decoder.py
+
+environment/env_delayed_feedback.py
+- state update를 frame 단위로 delay 시켜줌
+- delayed feedback 을 frame 단위로 적용

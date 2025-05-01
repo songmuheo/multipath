@@ -14,11 +14,11 @@ training_data_split: 0.6  # training 데이터셋 비율
 log_save_freq: 1  # 몇 에피소드마다 로그를 저장할지
 history_length: 60  # state를 정의할 때 평균 및 분산 계산 시 window size 결정
 load_model_path:  # start initial state
-# /home/songmu/multipath/rl/results/2025_01_26_18_21/models/ppo_model_episode350.pth
+# /home/songmu/multipath/rl/results/2025_03_27_13_46/models/ppo_model_episode200.pth
 
 # evaluation mode
 num_eval_episodes: 1
-model_path: /home/songmu/multipath/rl/results/2025_03_04_21_39/models/ppo_model_episode170.pth
+model_path: /home/songmu/multipath/rl/results/2025_04_01_20_10/models/ppo_model_episode300.pth
 
 # log path
 frame_dir: /home/songmu/multipath/client/logs/2025_02_17_14_14/frames_with_sequence
@@ -30,10 +30,10 @@ lg_log_dir: /home/songmu/multipath/server/logs/2025_02_17_13_57/lg_log.csv
 # lg_log_dir: /home/songmu/multipath/server/logs/2024_12_10_16_45/lg_log.csv
 
 # Environment, Reward
-# latency_threshold: 40  # ms
-latency_threshold: 30  # ms
-ssim_threshold: 0.9
-gamma_reward: 0.1
+# latency_threshold: 30  # ms
+latency_threshold: 35  # ms
+ssim_threshold: 0.85
+gamma_reward: 0.11
 state_num: 13
 
 # Normalize 설정
